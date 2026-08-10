@@ -437,7 +437,7 @@ class TestMigration005:
     def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh5.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2, 3, 4, 5]
+        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6]
 
     def test_upgrade_from_a_phase_4_database(self, tmp_path: Path) -> None:
         staged = tmp_path / "upto_004"
@@ -452,7 +452,7 @@ class TestMigration005:
         assert db.schema_version(conn) == 4
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [5]
+        assert [m.version for m in applied] == [5, 6]
 
     def test_new_draft_columns_exist(self, connection: sqlite3.Connection) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(draft_versions)")}
@@ -494,3 +494,79 @@ class TestMigration005:
             text = path.read_text(encoding="utf-8").lower()
             assert "post_format" not in text
             assert "writer_notes_json" not in text
+
+
+class TestMigration006:
+    """Phase-7 publications: additive, append-only, and idempotent by construction."""
+
+    def test_upgrade_from_a_phase_5_database(self, tmp_path: Path) -> None:
+        staged = tmp_path / "upto_005"
+        staged.mkdir()
+        for name in sorted(p.name for p in db.MIGRATIONS_DIR.glob("00[1-5]_*.sql")):
+            (staged / name).write_text(
+                (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        conn = db.connect(tmp_path / "upgrade6.sqlite3")
+        db.migrate(conn, staged)
+        assert db.schema_version(conn) == 5
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [6]
+
+    def test_history_is_untouched(self) -> None:
+        """001-005 are never edited; 006 adds a table and nothing else."""
+        text = (db.MIGRATIONS_DIR / "006_publications.sql").read_text(encoding="utf-8").lower()
+        assert "create table publications" in text
+        for forbidden in ("drop table", "alter table drafts", "alter table draft_versions",
+                          "alter table review_decisions", "drop trigger", "drop index"):
+            assert forbidden not in text
+
+    def test_the_publications_table_exists(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(publications)")}
+        assert {
+            "id", "draft_id", "draft_version_id", "review_decision_id", "content_hash",
+            "channel", "status", "message_id", "chat_id", "attempt_no", "failure_reason",
+            "published_at", "created_at",
+        } <= columns
+
+    def test_an_unknown_status_is_refused(self, connection: sqlite3.Connection) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO publications (id, draft_id, draft_version_id, "
+                "review_decision_id, content_hash, channel, status, created_at) "
+                "VALUES ('p', 'd', 'v', 'r', 'h', '@c', 'MAYBE', 'now')"
+            )
+
+    def test_a_success_without_a_message_id_is_refused(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        """The database will not record a success it has no evidence for."""
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO publications (id, draft_id, draft_version_id, "
+                "review_decision_id, content_hash, channel, status, created_at) "
+                "VALUES ('p', 'd', 'v', 'r', 'h', '@c', 'SUCCEEDED', 'now')"
+            )
+
+    def test_append_only_triggers_are_installed(self, connection: sqlite3.Connection) -> None:
+        """Enforcement with real rows lives in the repository tests; this is the schema."""
+        triggers = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = 'publications'"
+            )
+        }
+        assert triggers == {"trg_publications_no_update", "trg_publications_no_delete"}
+
+    def test_one_success_per_version_and_destination_is_unique(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        index = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_publications_one_success_per_destination'"
+        ).fetchone()["sql"]
+        assert "UNIQUE" in index
+        assert "draft_version_id" in index and "channel" in index
+        assert "SUCCEEDED" in index

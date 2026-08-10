@@ -26,7 +26,7 @@ from ai_news_editor.domain.errors import (
 from ai_news_editor.publishing.base import PublicationReceipt, Publisher
 from ai_news_editor.publishing.gate import (
     approve_draft,
-    current_authorization,
+    authorization_for_approved_draft,
     publish_with_gate,
     verify_publication,
 )
@@ -115,7 +115,7 @@ class TestApprovalHappyPath:
         """A send must not depend on still holding the token from the approval call."""
         draft, _ = pending
         approve_draft(connection, draft.id)
-        assert current_authorization(connection, draft.id) is not None
+        assert authorization_for_approved_draft(connection, draft.id) is not None
 
 
 class TestUnapprovedCannotPublish:
@@ -123,7 +123,7 @@ class TestUnapprovedCannotPublish:
         self, pending, connection: sqlite3.Connection
     ) -> None:
         draft, _ = pending
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
     def test_a_pending_draft_cannot_reach_a_publisher(
         self, pending, connection: sqlite3.Connection
@@ -163,7 +163,7 @@ class TestUnapprovedCannotPublish:
 
         with pytest.raises(NotApprovedError):
             approve_draft(connection, draft.id)
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
 
 class TestRejectedAndRewrite:
@@ -174,7 +174,7 @@ class TestRejectedAndRewrite:
         reject_draft(connection, draft.id, note="not for this channel")
 
         assert drafts.get(draft.id).status is DraftStatus.REJECTED
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
         with pytest.raises(NotApprovedError):
             approve_draft(connection, draft.id)
 
@@ -195,7 +195,7 @@ class TestRejectedAndRewrite:
         request_rewrite(connection, draft.id, note="занадто технічно")
 
         assert drafts.get(draft.id).status is DraftStatus.NEEDS_REWRITE
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
     def test_the_rewrite_reason_is_kept(
         self, pending, connection: sqlite3.Connection
@@ -263,7 +263,7 @@ class TestEditInvalidatesApproval:
         draft, _ = pending
         approve_draft(connection, draft.id)
         apply_edit(connection, draft.id, headline="🆕 Інший заголовок", body=EDITED_BODY)
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
         second = approve_draft(connection, draft.id)
         assert second.version_no == 2
@@ -305,7 +305,7 @@ class TestEditInvalidatesApproval:
         assert version_two.content_hash == version_one.content_hash
         assert version_two.id != version_one.id
         assert authorization.authorizes(version_two) is False
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
 
 class TestPublicationGate:
@@ -475,7 +475,7 @@ class TestNoBypass:
         assert offenders == []
 
     def test_no_command_approves_without_the_review_loop(self) -> None:
-        """There is no top-level approve command to call instead of reviewing."""
+        """There is no command that approves. Publishing exists, but it cannot approve."""
         from typer.main import get_command
 
         from ai_news_editor.cli.main import app
@@ -492,7 +492,9 @@ class TestNoBypass:
 
         walk(get_command(app), "")
         assert names, "the CLI should expose commands"
-        assert not any("approve" in name or "publish" in name for name in names)
+        # "publication approved" is a read-only listing, not an action.
+        actions = [name for name in names if not name.startswith("publication ")]
+        assert not any("approve" in name for name in actions)
 
     def test_approval_requires_an_explicit_confirmation_word(self) -> None:
         from ai_news_editor.cli.review import APPROVE_WORD
@@ -512,36 +514,43 @@ class TestNoBypass:
         drafts.set_status(draft.id, DraftStatus.PENDING_REVIEW)
 
         assert drafts.get(draft.id).status is DraftStatus.PENDING_REVIEW
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
         assert review_history(connection, draft.id) == []
 
-    def test_no_telegram_client_exists(self) -> None:
+    def test_the_telegram_client_cannot_reach_the_approval_machinery(self) -> None:
+        """Phase 7 adds a real sender. It stays on its own side of the gate."""
+        from pathlib import Path
+
+        import ai_news_editor
+
+        source = (
+            Path(ai_news_editor.__file__).parent / "publishing" / "telegram.py"
+        ).read_text(encoding="utf-8")
+        for forbidden in (
+            "issue_publication_authorization",
+            "approve_draft",
+            "DraftRepository",
+            "ReviewDecisionRepository",
+            "set_status",
+        ):
+            assert forbidden not in source
+
+    def test_only_the_publishing_layer_can_send(self) -> None:
+        """No earlier stage of the pipeline can cause a post."""
         from pathlib import Path
 
         import ai_news_editor
 
         package_root = Path(ai_news_editor.__file__).parent
-        forbidden = ("api.telegram.org", "sendMessage", "import telegram", "bot_token")
+        # Only a call, not a mention: several modules explain sendMessage in prose,
+        # and the redaction filter names it in a comment about what a leaked URL holds.
         offenders = [
-            (path.name, token)
+            path.relative_to(package_root).as_posix()
             for path in package_root.rglob("*.py")
-            for token in forbidden
-            if token in path.read_text()
+            if '"sendMessage"' in path.read_text(encoding="utf-8")
+            and path.relative_to(package_root).as_posix() != "publishing/telegram.py"
         ]
         assert offenders == []
-
-    def test_no_publisher_implementation_ships_yet(self) -> None:
-        """Phase 6 defines the gate; Phase 7 adds the first real publisher."""
-        from pathlib import Path
-
-        import ai_news_editor
-
-        publishing = Path(ai_news_editor.__file__).parent / "publishing"
-        assert sorted(p.name for p in publishing.glob("*.py")) == [
-            "__init__.py",
-            "base.py",
-            "gate.py",
-        ]
 
     def test_the_publisher_protocol_demands_an_authorization(self) -> None:
         import inspect
@@ -575,7 +584,7 @@ class TestCorruptedState:
         draft, _ = pending
         drafts.set_status(draft.id, DraftStatus.APPROVED)
 
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
     def test_an_approval_recorded_against_other_content_yields_no_authorization(
         self, pending, connection: sqlite3.Connection, drafts: DraftRepository
@@ -595,7 +604,7 @@ class TestCorruptedState:
             )
         )
 
-        assert current_authorization(connection, draft.id) is None
+        assert authorization_for_approved_draft(connection, draft.id) is None
 
     def test_a_reapproved_draft_does_not_publish_its_old_version(
         self, pending, connection: sqlite3.Connection, drafts: DraftRepository

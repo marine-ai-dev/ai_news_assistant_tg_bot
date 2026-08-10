@@ -23,7 +23,7 @@ from rich.table import Table
 
 from ai_news_editor.domain.enums import Category, DraftStatus, ReviewAction
 from ai_news_editor.domain.errors import AiNewsError
-from ai_news_editor.publishing.gate import approve_draft, current_authorization
+from ai_news_editor.publishing.gate import approve_draft, authorization_for_approved_draft
 from ai_news_editor.review.editing import EditorError, edit_text
 from ai_news_editor.review.service import (
     ReviewError,
@@ -363,7 +363,7 @@ def show_history(
 
         versions = repo.list_versions(match.id)
         decisions = review_history(connection, match.id)
-        authorization = current_authorization(connection, match.id)
+        authorization = authorization_for_approved_draft(connection, match.id)
     finally:
         connection.close()
 

@@ -207,3 +207,16 @@ class AudienceTier(StrEnum):
     BEGINNER = "BEGINNER"
     GENERAL = "GENERAL"
     TECH_CURIOUS = "TECH_CURIOUS"
+
+
+class PublicationStatus(StrEnum):
+    """Outcome of one attempt to send a draft version to a channel.
+
+    ``UNCERTAIN`` is the honest state, not an oversight. A send whose response was lost
+    in transit may or may not have produced a post, and the only safe thing an
+    application can do is say so and stop.
+    """
+
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    UNCERTAIN = "UNCERTAIN"

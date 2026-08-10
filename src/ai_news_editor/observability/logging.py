@@ -100,6 +100,13 @@ def configure_logging(level: str = "INFO", fmt: str = "console") -> None:
     root.addHandler(handler)
     root.setLevel(level)
 
+    # httpx logs every request line at INFO, including the full URL. For the Telegram
+    # Bot API the URL contains the bot token. The redaction filter catches it, but the
+    # quieter surface is the safer one: a secret that is never formatted cannot leak
+    # through a handler somebody adds later.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 
 def get_logger(name: str) -> logging.Logger:
     """Return a module logger."""

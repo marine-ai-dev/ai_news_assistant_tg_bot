@@ -18,6 +18,7 @@ from rich.table import Table
 from ai_news_editor import __version__
 from ai_news_editor.cli.draft import app as draft_app
 from ai_news_editor.cli.editorial import app as editorial_app
+from ai_news_editor.cli.publish import publication_app, publish, telegram_app
 from ai_news_editor.cli.review import app as review_app
 from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
@@ -46,6 +47,11 @@ app.add_typer(db_app)
 app.add_typer(editorial_app)
 app.add_typer(draft_app)
 app.add_typer(review_app)
+app.add_typer(publication_app)
+app.add_typer(telegram_app)
+# A plain command, not a group: "publish" takes one draft id and nothing else, and a
+# Typer group would treat that id as a subcommand name.
+app.command("publish")(publish)
 
 #: Literal statements rather than an interpolated table name: no SQL in this codebase
 #: is built by string formatting, not even from trusted constants.
@@ -56,6 +62,7 @@ _COUNT_QUERIES = {
     "drafts": "SELECT COUNT(*) AS n FROM drafts",
     "draft_versions": "SELECT COUNT(*) AS n FROM draft_versions",
     "review_decisions": "SELECT COUNT(*) AS n FROM review_decisions",
+    "publications": "SELECT COUNT(*) AS n FROM publications",
 }
 
 

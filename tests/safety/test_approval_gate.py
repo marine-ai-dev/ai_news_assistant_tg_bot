@@ -522,8 +522,52 @@ class TestNoIntegrationsExist:
             for path in package_root.rglob("*.py")
         ]
 
-    def test_no_telegram_integration_exists(self) -> None:
-        forbidden = ("api.telegram.org", "import telegram", "telebot", "aiogram", "TELEGRAM_BOT")
+    def test_telegram_is_confined_to_the_publishing_layer(self) -> None:
+        """Phase 7 adds a real Telegram client. It lives in exactly one place.
+
+        The collection, normalization, editorial and writing layers must not be able to
+        reach the channel — a send is the consequence of an approval, and no layer that
+        runs before the approval has any business being able to cause one.
+        """
+        allowed = {"publishing/telegram.py", "cli/publish.py"}
+        offenders = [
+            name
+            for name, text in self._sources()
+            if "api.telegram.org" in text and name not in allowed
+        ]
+        assert offenders == []
+
+    def test_no_telegram_framework_is_used(self) -> None:
+        """A thin client over httpx. No update loop, no dispatcher, no handlers.
+
+        Matches import statements rather than the words, so a docstring explaining
+        *why* aiogram was not used does not count as using it.
+        """
+        import re
+
+        pattern = re.compile(
+            r"^\s*(?:import|from)\s+(telegram|telebot|aiogram|telethon|pyrogram)\b", re.M
+        )
+        offenders = [name for name, text in self._sources() if pattern.search(text)]
+        assert offenders == []
+
+    def test_no_incoming_telegram_handling_exists(self) -> None:
+        """Phase 7 is outbound only. The review bot is a later, separate thing."""
+        forbidden = (
+            "getUpdates", "setWebhook", "callback_query", "InlineKeyboard",
+            "reply_markup", "answerCallbackQuery",
+        )
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
+            for token in forbidden
+            if token in text
+        ]
+        assert offenders == []
+
+    def test_no_scheduling_exists(self) -> None:
+        """No queue, no cron, no calendar. Publication is a human pressing a key."""
+        forbidden = ("apscheduler", "import schedule", "celery", "crontab", "BackgroundScheduler")
         offenders = [
             (name, token)
             for name, text in self._sources()
@@ -585,12 +629,23 @@ class TestNoIntegrationsExist:
 
     def test_http_access_is_confined_to_the_sources_layer(self) -> None:
         """Only the source adapters may talk to the network, through one boundary."""
-        allowed = {"sources/http.py", "sources/rss.py", "sources/config.py", "cli/main.py"}
+        allowed = {
+            "sources/http.py",
+            "sources/rss.py",
+            "sources/config.py",
+            "cli/main.py",
+            # Phase 7: the only other outbound boundary, and the only one that writes.
+            "publishing/telegram.py",
+        }
+        import re
+
+        pattern = re.compile(
+            r"^\s*(?:import|from)\s+(httpx|urllib\.request|requests)\b", re.M
+        )
         offenders = [
             name
             for name, text in self._sources()
-            if ("httpx" in text or "urllib.request" in text or "import requests" in text)
-            and name not in allowed
+            if pattern.search(text) and name not in allowed
         ]
         assert offenders == []
 
@@ -634,14 +689,26 @@ class TestNoIntegrationsExist:
         ]
         assert offenders == []
 
-    def test_no_api_key_setting_exists(self) -> None:
-        """No credential is required to run the editorial workflow."""
+    def test_the_only_credential_is_the_telegram_token(self) -> None:
+        """One secret in the whole application, and it is not for a model provider."""
+        from ai_news_editor.settings import Settings
+
+        credential_fields = {
+            name
+            for name in Settings.model_fields
+            if any(word in name for word in ("api_key", "token", "secret", "password"))
+        }
+        assert credential_fields == {"telegram_bot_token"}
+
+    def test_no_model_provider_credential_exists(self) -> None:
+        """Running the editorial and writing workflow still requires no API key."""
         from ai_news_editor.settings import Settings
 
         for field in Settings.model_fields:
             assert "api_key" not in field
-            assert "token" not in field
-            assert "secret" not in field
+            assert "llm" not in field
+            assert "openai" not in field
+            assert "anthropic" not in field
 
     def test_no_model_weights_are_referenced(self) -> None:
         forbidden = (".safetensors", ".gguf", ".onnx", "from_pretrained", "hf_hub_download")

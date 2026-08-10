@@ -32,6 +32,7 @@ from ai_news_editor.domain.enums import (
     FetchOutcome,
     PostFormat,
     PrefilterReason,
+    PublicationStatus,
     ReviewAction,
     SourceKind,
     TrustTier,
@@ -328,3 +329,47 @@ class ReviewDecision(ImmutableDomainModel):
     actor: NonEmptyStr
     note: str | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
+
+
+class Publication(ImmutableDomainModel):
+    """One attempt to send an exact draft version to an exact destination.
+
+    Every attempt is recorded, including the failures and the ones whose outcome was
+    never learned. A publications table that only holds successes cannot answer the
+    question that matters after a bad night: "did that post go out or not?"
+
+    ``content_hash`` is duplicated here for the same reason it is duplicated on a review
+    decision — it records what was actually sent, independently of what the version row
+    says today.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    draft_id: UUID
+    draft_version_id: UUID
+    #: The approval this publication rests on. Publication is not the decision; it is
+    #: the consequence of one, and the link makes that auditable.
+    review_decision_id: UUID
+    content_hash: NonEmptyStr
+    #: The destination as configured — "@channel" or a numeric id, as written.
+    channel: NonEmptyStr
+    status: PublicationStatus
+    #: Telegram's message id. Present only for a send known to have succeeded.
+    message_id: int | None = None
+    #: The chat id Telegram reported back, which may be numeric even when the
+    #: destination was configured by @username.
+    chat_id: str | None = None
+    attempt_no: int = Field(default=1, ge=1)
+    #: Why a FAILED or UNCERTAIN attempt ended that way. Redacted before storage.
+    failure_reason: str | None = None
+    published_at: UtcDatetime | None = None
+    created_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _successful_publications_have_proof(self) -> Self:
+        """A success must carry Telegram's own evidence that it happened."""
+        if self.status is PublicationStatus.SUCCEEDED:
+            if self.message_id is None:
+                raise ValueError("a SUCCEEDED publication must record a Telegram message id")
+            if self.published_at is None:
+                raise ValueError("a SUCCEEDED publication must record when it was sent")
+        return self

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from ai_news_editor.domain.enums import PostFormat
+from ai_news_editor.domain.models import DraftVersion
 
 #: Editorial targets in characters of rendered post text, not hard limits. A post
 #: outside its range is reported, never rewritten or cropped.
@@ -102,6 +103,44 @@ def render_post(*, headline: str, body: str, source_label: str, source_url: str)
     content hash covers exactly the post a reviewer approves.
     """
     return "\n\n".join([headline.strip(), body.strip(), source_line(source_label, source_url)])
+
+
+def source_label_of(source_attribution: str) -> str:
+    """Recover the human-readable source name from a rendered attribution line."""
+    first_line = source_attribution.split("\n")[0]
+    return first_line.split(": ", 1)[-1].strip() or "Джерело"
+
+
+def source_url_of(version: DraftVersion) -> str:
+    """The version's source link.
+
+    Falls back to the URL inside the rendered attribution line, for drafts written
+    before ``source_url`` had its own column. The link has always been present in the
+    attribution, so nothing ever has to be invented.
+    """
+    if version.source_url:
+        return version.source_url
+    for token in version.source_attribution.split():
+        if token.startswith(("http://", "https://")):
+            return token
+    return ""
+
+
+def render_version(version: DraftVersion) -> str:
+    """The post text for a stored version.
+
+    One function, deliberately. The review screen shows this, the content hash covers
+    the fields it is built from, and the publisher sends it — if each derived the text
+    its own way, a reviewer could approve one string and a channel could receive
+    another. That is the entire failure mode this project exists to prevent, and the
+    cheapest defence is to have only one renderer.
+    """
+    return render_post(
+        headline=version.title,
+        body=version.body,
+        source_label=source_label_of(version.source_attribution),
+        source_url=source_url_of(version),
+    )
 
 
 def check_length(text: str, post_format: PostFormat) -> LengthCheck:

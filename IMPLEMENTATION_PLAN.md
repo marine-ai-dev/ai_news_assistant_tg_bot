@@ -1473,3 +1473,113 @@ first version of it matched a comment explaining why the flags do not exist.
 `publish_with_gate` verifies before delegating, but `publishing/` contains no
 implementation — a test asserts the directory holds only `base.py` and `gate.py`. The
 first real transport arrives in Phase 7, against a gate that was already proven.
+
+### 26.12 Phase 7 notes (Telegram publishing)
+
+**The Bot API was re-read, not remembered.** Verified against the official documentation
+at implementation time: Bot API 10.2, 14 July 2026. Three details would have been wrong
+from memory — `link_preview_options` has replaced the `disable_web_page_preview`
+boolean; the `text` limit is 1-4096 characters; and error responses carry
+`parameters.retry_after` rather than a header.
+
+**No Telegram framework.** python-telegram-bot, aiogram and Telethon all exist to
+receive updates and dispatch them to handlers. This application receives nothing. Four
+POSTs over `httpx`, which was already a dependency, is the entire requirement — and
+every dependency in a publishing path is something that can change what gets sent.
+
+**A separate client from `sources/http.py`.** The feed client retries freely, because
+re-reading a feed is free. Re-sending a message is not: it can put a second copy of a
+post in front of an audience. The Telegram client's retry policy is therefore the
+inverse — two attempts maximum, only for failures that provably never reached Telegram
+or that Telegram itself asked us to wait out, and never for anything that might already
+have been delivered.
+
+**Length is measured in UTF-16 code units.** Telegram counts characters the way
+JavaScript does, so an emoji outside the basic plane counts as two. `len()` would
+under-count exactly the posts most likely to be near the limit — every headline in this
+channel starts with an emoji. Over the limit is refused, never truncated and never split
+across two messages; splitting a post is an editorial decision.
+
+**Plain text unless the writer used markup.** Phase 5 permits `b i u s a code pre`, all
+of which Telegram's HTML mode supports. But most posts contain none of them, and plain
+text cannot be misparsed — there is no escaping to get wrong. HTML mode is used only
+when a permitted tag is actually present, and then bare `<`, `>` and `&` are escaped as
+the API requires. A test asserts the round trip: what a reader sees equals what was
+approved, character for character.
+
+**One renderer, shared.** `writing/format.render_version` is now the single function
+that turns a version into post text, used by the review screen and the publisher. They
+previously derived the source URL slightly differently, which meant a reviewer could in
+principle approve one string while the channel received another. That is the whole
+failure mode this project exists to prevent, and the cheapest defence is to have only
+one renderer.
+
+**`authorization_for_approved_draft` replaces `current_authorization`.** Same function,
+honest name. Approval and publication are separate human acts that may be days and a
+restart apart, so an authorization is rebuilt from storage on every send rather than
+serialized. Nothing persists a `PublishAuthorization`; the stored authority is the
+APPROVE row plus the exact version plus the draft's current status, and a safety test
+asserts no module writes one to disk and no column holds one.
+
+**The gate runs twice, and the second time is the one that matters.**
+`prepare_publication` verifies before building the preview; `publish_draft` verifies
+again immediately before sending. The gap between them is a human reading a preview and
+typing a word, and a draft can be edited from another terminal in that gap. A test
+covers exactly that: a plan prepared before an edit sends nothing after it.
+
+**Migration 006 creates `publications` as an attempt log, not a success log.** Failures
+and — crucially — attempts whose outcome was never learned are first-class rows. A
+unique *partial* index on `(draft_version_id, channel) WHERE status = 'SUCCEEDED'` is
+the idempotency rule: one exact version publishes at most once per destination, while
+failed and uncertain attempts stay repeatable. Append-only triggers, like every other
+audit table.
+
+**The uncertain outcome gets a state rather than a guess.** A send whose response is
+lost may or may not have produced a post; `sendMessage` offers no idempotency key, so
+nothing local can tell. The attempt is recorded `UNCERTAIN`, the draft stays in
+`PUBLISHING` — which is already a non-publishable state, so no new status was invented —
+and the next run refuses. Resolving it means looking at the channel, which is a human's
+job.
+
+**`PUBLISH_FAILED` is deliberately transient.** A definite failure passes through it and
+returns to `APPROVED`, so a retry does not need a second human approval — the approval
+was never in question, only the network. The permanent record of the failure is the
+`publications` row, which is where an audit should look anyway.
+
+**Two token leaks were found and fixed while writing the tests.** The redaction pattern
+required a word boundary before the digits, so a token inside
+`api.telegram.org/bot<token>/sendMessage` did not match — the URL form is now its own
+pattern. And the log filter only scrubbed `str` arguments, while httpx logs the request
+URL as an `httpx.URL` object; non-string arguments are now checked by their string form.
+httpx's own request logging is additionally turned down to WARNING, because the quietest
+surface is the safest one.
+
+**Not built, on purpose.** No `getUpdates`, no webhook, no inline keyboards, no callback
+queries — the bot is outbound only, and the Telegram review bot is a separate thing that
+comes after the MVP works. No scheduler, no queue, no content calendar. No media. No
+`--all`, `--yes` or `--auto` on any publishing command, with a test walking Typer's
+registered options to keep it that way.
+
+---
+
+## 27. The core MVP is complete
+
+    collect → process → Claude editorial → Claude writing → human review
+    → approval gate → Telegram publication
+
+Every stage is implemented, tested offline, and has a human at the only two points where
+a decision is irreversible: approving content, and sending it.
+
+Deferred, in rough order of usefulness:
+
+* **Telegram review bot** — approve and reject from a phone, with buttons. The review
+  actions already live in `review/service.py` for exactly this reason; the bot is a
+  second front end over the same functions, not a reimplementation.
+* **Images** — `sendPhoto`, and the question of where a picture comes from that is
+  honest about what it depicts.
+* **Publication queue and scheduling** — spacing posts, a content calendar, "post this
+  on Thursday". Everything needed to do it badly exists; doing it well needs the channel
+  to have a rhythm first.
+* **Multi-message deep dives** — splitting a long post deliberately rather than refusing
+  it.
+* **Content strategy** — recurring formats, series, a mix target across categories.

@@ -8,10 +8,12 @@ what happens when a draft moves while somebody is looking at it.
 from __future__ import annotations
 
 import sqlite3
+from uuid import uuid4
 
 import pytest
 
-from ai_news_editor.domain.enums import Category, DraftStatus, PostFormat
+from ai_news_editor.domain.enums import AudienceTier, Category, DraftStatus, PostFormat
+from ai_news_editor.domain.models import DraftVersion
 from ai_news_editor.review.service import (
     ReviewError,
     apply_edit,
@@ -211,12 +213,32 @@ class TestDecisionPreconditions:
 class TestSourceRecovery:
     """Drafts written before source_url had its own column still carry the link."""
 
-    def test_the_link_is_recovered_from_the_attribution_line(self) -> None:
-        from ai_news_editor.review.service import _source_url
+    def _version(self, attribution: str, url: str | None) -> DraftVersion:
+        return DraftVersion(
+            draft_id=uuid4(),
+            version_no=1,
+            title="Заголовок",
+            body=GOOD_BODY,
+            category=Category.PRODUCT_UPDATE,
+            audience=AudienceTier.GENERAL,
+            source_attribution=attribution,
+            source_url=url,
+            created_by="test",
+        )
 
-        assert _source_url("🔗 Джерело: Alpha\nhttps://a.invalid/x") == "https://a.invalid/x"
+    def test_the_column_wins_when_it_is_set(self) -> None:
+        from ai_news_editor.writing.format import source_url_of
+
+        version = self._version("🔗 Джерело: Alpha\nhttps://a.invalid/x", "https://a.invalid/y")
+        assert source_url_of(version) == "https://a.invalid/y"
+
+    def test_the_link_is_recovered_from_the_attribution_line(self) -> None:
+        from ai_news_editor.writing.format import source_url_of
+
+        version = self._version("🔗 Джерело: Alpha\nhttps://a.invalid/x", None)
+        assert source_url_of(version) == "https://a.invalid/x"
 
     def test_an_attribution_with_no_link_recovers_nothing(self) -> None:
-        from ai_news_editor.review.service import _source_url
+        from ai_news_editor.writing.format import source_url_of
 
-        assert _source_url("🔗 Джерело: Alpha") == ""
+        assert source_url_of(self._version("🔗 Джерело: Alpha", None)) == ""

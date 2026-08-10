@@ -2,12 +2,13 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: Phase 6 of 7 — human review.** Collects from eight sources, normalizes and
-deduplicates deterministically, then exports candidates for editorial review and imports ranked
-decisions, then turns shortlisted stories into Ukrainian draft posts, then puts them in front of
-a human who approves, edits, rejects or sends them back. The pipeline ends at `APPROVED` — there
-is no publisher and no Telegram integration yet. See
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phase.
+**Status: core MVP complete (phases 1-7).** Collects from eight sources, normalizes and
+deduplicates deterministically, exports candidates for editorial review and imports ranked
+decisions, turns shortlisted stories into Ukrainian draft posts, puts them in front of a human
+who approves, edits, rejects or sends them back — and publishes an approved post to a Telegram
+channel after a second explicit confirmation. See
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and what was deliberately
+left for later.
 
 **There is no LLM API in this project.** The editorial judgement is made by a Claude Code
 session reading an exported batch and writing back structured decisions. Python owns
@@ -23,6 +24,8 @@ being published. That is enforced structurally, not by convention:
 - a `PublishAuthorization` can only be produced by the approval gate, and names one content hash
 - appending content to an `APPROVED` draft returns it to `PENDING_REVIEW` at the storage layer
 - the lifecycle state machine rejects every transition that would skip review
+- an authorization is never stored; it is rebuilt from the recorded approval on every send
+- the Telegram client cannot approve anything, and is never reached for a draft that fails the gate
 
 See `src/ai_news_editor/domain/authorization.py` and `tests/safety/`.
 
@@ -76,6 +79,10 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news review` | Open the review queue: approve, edit, reject, request a rewrite |
 | `ai-news review status` | Show how many drafts sit in each state |
 | `ai-news review history <draft-id>` | Show every version and every human decision on a draft |
+| `ai-news telegram doctor` | Check the bot, the destination and posting rights. Sends nothing |
+| `ai-news publish <draft-id>` | Publish one approved draft, after typing `PUBLISH` |
+| `ai-news publication approved` | List drafts that are approved and therefore publishable |
+| `ai-news publication list` | The publication log: successes, failures, unresolved attempts |
 
 `collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
 parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
@@ -85,8 +92,6 @@ failed, and `2` on a configuration or database problem.
 them repeatedly converges instead of accumulating.
 
 `python app.py <command>` works identically without installing the package.
-
-`publish` is intentionally absent rather than present as a stub.
 
 ## Sources and trust tiers
 
@@ -213,6 +218,113 @@ ai-news review history <draft-id>
 Every version and every recorded decision, oldest first, with whether a valid publication
 authorization currently exists.
 
+## Publishing to Telegram
+
+`APPROVED` means a human approved that exact version. Publishing is a **second** decision,
+asked separately, because it is the one strangers can see.
+
+### 1. Create the bot
+
+Message [@BotFather](https://t.me/BotFather) in Telegram, send `/newbot`, and follow the
+prompts. It replies with a token that looks like `123456789:AA...`. **That token is a
+password for your channel** — anyone holding it can post. It goes in `.env` and nowhere else.
+
+### 2. Add the bot to a channel
+
+Start with a **private test channel**, not the real one. Create a channel, open
+*Administrators → Add Administrator*, add your bot, and grant **only** *Post Messages*. It
+needs nothing else — no delete, no ban, no member management, no message editing.
+
+A bot cannot see a chat it has not been added to, so this step has to happen before the
+next one will work.
+
+### 3. Configure
+
+```bash
+cp .env.example .env
+```
+
+Set `AI_NEWS_TELEGRAM_BOT_TOKEN` and `AI_NEWS_TELEGRAM_CHANNEL` (a public `@username` or a
+numeric chat id). `.env` is git-ignored. Never commit a real token; if one is ever exposed,
+revoke it with `/revoke` in BotFather.
+
+### 4. Check the setup without sending anything
+
+```bash
+ai-news telegram doctor
+```
+
+Calls `getMe`, `getChat` and `getChatMember` and reports the bot identity, the resolved
+destination and whether it has posting rights. It never posts a test message. Where the API
+cannot answer — `can_post_messages` is not reported for every chat type — it says `UNKNOWN`
+rather than claiming a pass.
+
+### 5. Approve something
+
+```bash
+ai-news review
+```
+
+Then check what is publishable:
+
+```bash
+ai-news publication approved
+```
+
+### 6. Dry run
+
+```bash
+ai-news publish <draft-id> --dry-run
+```
+
+Verifies the approval, rebuilds the authorization, renders the exact payload and prints it
+with the destination. Makes zero Telegram requests and records nothing.
+
+### 7. Publish
+
+```bash
+ai-news publish <draft-id>
+```
+
+One draft id, named explicitly — this command never goes looking for something to publish.
+It shows the destination and the exact text, then asks:
+
+```
+Type PUBLISH to publish:
+```
+
+Enter publishes nothing. `y` publishes nothing. `yes` publishes nothing. Only the literal
+word `PUBLISH` sends the message.
+
+### 8. Check the record
+
+```bash
+ai-news publication list
+```
+
+Every attempt: the successes with their Telegram message id, the failures, and any attempt
+whose outcome was never learned.
+
+### What happens if something goes wrong
+
+**A definite failure** — bad request, no permission, server error — records a `FAILED`
+attempt and returns the draft to `APPROVED`. Retrying does not need a second approval; the
+approval was never in question, only the network.
+
+**A lost response** is the interesting one. If the request was sent and the reply never
+arrived, the post may or may not exist, and nothing can tell the difference locally.
+Telegram's `sendMessage` has no idempotency key, so a retry could produce a duplicate post.
+The attempt is therefore recorded as `UNCERTAIN`, the draft stays in `PUBLISHING`, and the
+next run refuses to send. **Look at the channel and resolve it yourself** — that is a
+judgement about the outside world, and the application does not get to guess.
+
+**A duplicate run** — the same command twice, by accident — sends nothing the second time.
+A unique index allows one successful publication per version per destination, and the draft
+is already `PUBLISHED`, which is not a publishable state.
+
+SQLite and Telegram cannot share a transaction. This design does not pretend otherwise: it
+narrows the window, records every attempt, and stops rather than guessing.
+
 ## How processing works
 
 `collect` stores faithful `RawItem` records; `process` derives `Article` candidates from them.
@@ -254,7 +366,7 @@ src/ai_news_editor/
   sources/        source adapters: HTTP boundary, RSS/Atom, config, registry
   pipeline/       orchestration — the only layer combining adapters with storage
   review/         review actions and $EDITOR integration, independent of any front end
-  publishing/     the approval gate and the publisher protocol — no publisher yet
+  publishing/     the approval gate, the Telegram client, and the send-once orchestration
   observability/  structured logging, secret redaction
   cli/            Typer entry points
 tests/

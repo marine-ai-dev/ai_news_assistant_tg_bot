@@ -14,6 +14,11 @@ from typing import Any
 MASK = "[REDACTED]"
 
 _PATTERNS: tuple[re.Pattern[str], ...] = (
+    # A token inside a Bot API URL: .../bot<id>:<secret>/sendMessage. This has to come
+    # first and match on its own, because the standalone token pattern below needs a
+    # word boundary before the digits and "bot123456" does not provide one — an httpx
+    # exception carrying the request URL would otherwise print the token in full.
+    re.compile(r"(?i)/bot\d{6,12}:[A-Za-z0-9_-]{20,}"),
     # Telegram bot token: <numeric bot id>:<35-char secret>
     re.compile(r"\b\d{6,12}:[A-Za-z0-9_-]{30,}\b"),
     # OpenAI-style keys and common vendor prefixes
@@ -45,7 +50,16 @@ def _redact_value(value: Any) -> Any:
         return tuple(_redact_value(v) for v in value)
     if isinstance(value, dict):
         return {k: _redact_value(v) for k, v in value.items()}
-    return value
+    # Not a string, but it will become one when the record is formatted. httpx logs the
+    # request URL as an httpx.URL object, and that URL contains the bot token — checking
+    # only str arguments let the token through into the log. The original object is kept
+    # whenever redaction changed nothing, so ordinary values keep their type and repr.
+    try:
+        text = str(value)
+    except Exception:  # pragma: no cover - a __str__ that raises is not our problem
+        return value
+    cleaned = redact(text)
+    return cleaned if cleaned != text else value
 
 
 class RedactionFilter(logging.Filter):

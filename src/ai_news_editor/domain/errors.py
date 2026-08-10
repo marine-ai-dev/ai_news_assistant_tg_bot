@@ -63,3 +63,58 @@ class UnauthorizedConstructionError(ApprovalError):
     Raised to make forging an authorization a loud failure rather than a silent
     security hole. See :mod:`ai_news_editor.domain.authorization`.
     """
+
+
+class PublicationError(AiNewsError):
+    """Base class for failures of the publication path."""
+
+
+class PublicationAlreadyExistsError(PublicationError):
+    """This exact draft version was already published to this destination.
+
+    Not a failure of the send — a refusal to make a second one.
+    """
+
+
+class PublicationOutcomeUncertainError(PublicationError):
+    """The request may or may not have reached the channel.
+
+    Raised when the local side lost the response. Retrying could duplicate a real post,
+    so the attempt is recorded for a human to resolve and nothing is retried.
+    """
+
+
+class TelegramError(PublicationError):
+    """Base class for failures reported by, or against, the Telegram Bot API."""
+
+
+class TelegramAuthenticationError(TelegramError, FatalError):
+    """The bot token is missing, malformed or rejected. Never retried."""
+
+
+class TelegramPermissionError(TelegramError, FatalError):
+    """The bot may not post to the destination. Never retried."""
+
+
+class TelegramDestinationError(TelegramError, FatalError):
+    """The configured destination does not exist or is not a postable chat."""
+
+
+class TelegramContentError(TelegramError, FatalError):
+    """Telegram refused the message text itself: too long, or bad markup."""
+
+
+class TelegramRateLimitError(TelegramError, RetryableError):
+    """Too many requests. Carries the server's own ``retry_after`` when given."""
+
+    def __init__(self, message: str, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class TelegramApiError(TelegramError, RetryableError):
+    """Any other Telegram failure, including malformed responses."""
+
+    def __init__(self, message: str, error_code: int | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code

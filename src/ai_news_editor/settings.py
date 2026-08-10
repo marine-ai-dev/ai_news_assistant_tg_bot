@@ -4,9 +4,9 @@ Everything is read from the environment (optionally via a local ``.env``) with t
 ``AI_NEWS_`` prefix. Configuration errors fail loudly at startup rather than surfacing
 as confusing behaviour later.
 
-No secrets are consumed yet — Phase 1 has no external integrations. When LLM and
-Telegram credentials arrive they belong here as ``SecretStr`` fields, never in the
-YAML config files and never in the database.
+The only secret this application has is the Telegram bot token. It is a ``SecretStr``,
+so printing the settings object cannot leak it; it lives in the environment, never in
+the YAML config files and never in the database.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ai_news_editor.domain.errors import ConfigurationError
@@ -57,6 +57,47 @@ class Settings(BaseSettings):
             "code path behind it; setting it true is rejected at startup."
         ),
     )
+
+    telegram_bot_token: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Bot token from BotFather. SecretStr so it cannot be printed by accident — "
+            "repr and str both mask it. Never written to the database or a log."
+        ),
+    )
+    telegram_channel: str | None = Field(
+        default=None,
+        description=(
+            "Publication destination: a public @username or a numeric chat id "
+            "(channels are typically negative, e.g. -1001234567890)."
+        ),
+    )
+
+    @field_validator("telegram_channel")
+    @classmethod
+    def _check_channel(cls, value: str | None) -> str | None:
+        """Catch a destination that Telegram will certainly reject, at startup.
+
+        A channel configured as bare text ("my_channel") silently resolves to nothing
+        useful; better to say so before a human is standing at a publish prompt.
+        """
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if trimmed.startswith("@"):
+            if len(trimmed) < 2:
+                raise ValueError("AI_NEWS_TELEGRAM_CHANNEL is just '@'")
+            return trimmed
+        try:
+            int(trimmed)
+        except ValueError:
+            raise ValueError(
+                "AI_NEWS_TELEGRAM_CHANNEL must be a public @username or a numeric chat "
+                f"id, got {trimmed!r}"
+            ) from None
+        return trimmed
 
     @field_validator("data_dir", "database_path", "sources_config_path")
     @classmethod

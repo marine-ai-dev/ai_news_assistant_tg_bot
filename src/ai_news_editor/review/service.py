@@ -33,6 +33,9 @@ from ai_news_editor.writing.format import (
     disallowed_tags,
     hard_limit_problem,
     render_post,
+    render_version,
+    source_label_of,
+    source_url_of,
 )
 
 logger = get_logger(__name__)
@@ -57,13 +60,12 @@ class ReviewItem:
 
     @property
     def rendered_post(self) -> str:
-        """The post exactly as it would be sent."""
-        return render_post(
-            headline=self.version.title,
-            body=self.version.body,
-            source_label=_source_label(self.version.source_attribution),
-            source_url=self.version.source_url or self.article.canonical_url,
-        )
+        """The post exactly as it would be sent.
+
+        Same renderer the publisher uses. A reviewer must never approve one string
+        while the channel receives another.
+        """
+        return render_version(self.version)
 
     @property
     def score(self) -> float | None:
@@ -199,8 +201,8 @@ def apply_edit(
     problem = validate_edit(
         headline=headline,
         body=body,
-        source_label=_source_label(current.source_attribution),
-        source_url=current.source_url or _source_url(current.source_attribution),
+        source_label=source_label_of(current.source_attribution),
+        source_url=source_url_of(current),
     )
     if problem:
         raise ReviewError(problem)
@@ -354,24 +356,6 @@ def _record_and_transition(
         extra={"draft_id": str(draft_id), "action": action.value, "actor": actor},
     )
     return drafts.get(draft_id)
-
-
-def _source_label(source_attribution: str) -> str:
-    """Recover the human-readable source name from the rendered attribution line."""
-    first_line = source_attribution.split("\n")[0]
-    return first_line.split(": ", 1)[-1].strip() or "Джерело"
-
-
-def _source_url(source_attribution: str) -> str:
-    """Recover the link from an attribution line.
-
-    A fallback for drafts stored before the URL got its own column: the link has always
-    been present in the rendered attribution, so an edit never has to invent one.
-    """
-    for token in source_attribution.split():
-        if token.startswith(("http://", "https://")):
-            return token
-    return ""
 
 
 def _clean(note: str | None) -> str | None:

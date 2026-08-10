@@ -74,8 +74,20 @@ class TestDataDir:
 
 
 class TestSecrets:
-    def test_no_credential_settings_exist_yet(self) -> None:
-        """Phase 1 consumes no secrets; fake requirements would be misleading."""
+    def test_the_telegram_token_is_the_only_credential(self) -> None:
+        """One secret in the whole application. Everything else needs no credential."""
         forbidden = {"api_key", "token", "secret", "password"}
-        fields = set(Settings.model_fields)
-        assert not any(any(word in field for word in forbidden) for field in fields)
+        credential_fields = {
+            field
+            for field in Settings.model_fields
+            if any(word in field for word in forbidden)
+        }
+        assert credential_fields == {"telegram_bot_token"}
+
+    def test_the_token_is_a_secret_string(self) -> None:
+        """SecretStr, so printing settings or a traceback cannot leak it."""
+        settings = Settings(telegram_bot_token="123456:ABCDEF")  # type: ignore[arg-type]
+        assert "123456:ABCDEF" not in repr(settings)
+        assert "123456:ABCDEF" not in str(settings.telegram_bot_token)
+        assert settings.telegram_bot_token is not None
+        assert settings.telegram_bot_token.get_secret_value() == "123456:ABCDEF"

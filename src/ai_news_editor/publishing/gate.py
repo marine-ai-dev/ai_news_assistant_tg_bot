@@ -123,14 +123,37 @@ def approve_draft(
     return authorization
 
 
-def current_authorization(
+def authorization_for_approved_draft(
     connection: sqlite3.Connection, draft_id: UUID
 ) -> PublishAuthorization | None:
-    """Re-issue the authorization for an already-approved draft, if one is still valid.
+    """Rebuild the authorization for an already-approved draft, from storage alone.
 
-    Used by the publishing path so a send does not depend on holding the token from the
-    original approval call. Returns ``None`` when the draft is not approved or its
-    approval no longer applies to the current version.
+    Approval and publication are separate human acts that may be separated by days, a
+    restart, or a different process. An authorization is never serialized to survive
+    that gap — a stored authorization would be a bearer token sitting in a file, which
+    is the thing this gate exists to make impossible. Instead the *persisted authority*
+    is reassembled and re-checked from scratch every time:
+
+        the APPROVE row in review_decisions
+        + the exact draft_versions row it names
+        + the draft's current status and current version pointer
+
+    In order, this requires:
+
+    1. the draft still exists;
+    2. its status is APPROVED — a later reject or rewrite changes it, so those
+       invalidate the approval by construction;
+    3. it has a current version;
+    4. an APPROVE decision exists *for that exact version id* — an approval of an
+       earlier version is not discoverable as an approval of this one;
+    5. the decision's content hash still matches the version's computed hash;
+    6. every check in :func:`issue_publication_authorization` passes.
+
+    A later edit fails at (2) and (4) together: appending a version returns the draft to
+    PENDING_REVIEW and the new version has no approval of its own.
+
+    Returns ``None`` — not an exception — when no valid authorization exists. "This
+    draft is not publishable" is an ordinary answer that callers ask for routinely.
     """
     drafts = DraftRepository(connection)
     decisions = ReviewDecisionRepository(connection)
