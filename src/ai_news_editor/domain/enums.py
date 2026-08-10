@@ -75,6 +75,45 @@ class DraftStatus(StrEnum):
     PUBLISH_FAILED = "PUBLISH_FAILED"
 
 
+class DuplicateReason(StrEnum):
+    """Why one article was judged a duplicate of another.
+
+    Stored alongside the link so the decision is auditable: "why was B marked a
+    duplicate of A?" must always have an answer that is a rule name, not a score.
+    """
+
+    #: Identical canonical URL — the strongest signal available.
+    SAME_CANONICAL_URL = "SAME_CANONICAL_URL"
+    #: Identical normalized title+body fingerprint. Verbatim syndication.
+    SAME_CONTENT_FINGERPRINT = "SAME_CONTENT_FINGERPRINT"
+    #: Identical normalized title from the same source. A feed re-emitting an entry.
+    SAME_TITLE_SAME_SOURCE = "SAME_TITLE_SAME_SOURCE"
+    #: Near-identical text by simhash within the comparison window.
+    NEAR_DUPLICATE_SIMHASH = "NEAR_DUPLICATE_SIMHASH"
+
+
+class PrefilterReason(StrEnum):
+    """Why an article was screened out before any LLM ever sees it.
+
+    Deliberately narrow: these are "obviously not publishable material" rules, not
+    editorial judgement. Deciding whether a real story is *interesting* belongs to the
+    LLM editor in Phase 4, which is why nothing here filters on technicality.
+    """
+
+    #: No usable title, and no summary or body text either.
+    EMPTY_CONTENT = "EMPTY_CONTENT"
+    #: Already represented by another article.
+    DUPLICATE = "DUPLICATE"
+    #: Published implausibly long ago — usually a malformed or paginated feed.
+    STALE_ITEM = "STALE_ITEM"
+    #: A hiring post rather than news.
+    JOB_LISTING = "JOB_LISTING"
+    #: Navigation, archive, index or newsletter-plumbing entries.
+    BOILERPLATE = "BOILERPLATE"
+    #: Investor relations, earnings and legal notices with no product story.
+    LEGAL_OR_INVESTOR_NOTICE = "LEGAL_OR_INVESTOR_NOTICE"
+
+
 class ReviewAction(StrEnum):
     """What a human did to a draft version during review."""
 

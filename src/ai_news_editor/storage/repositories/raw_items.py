@@ -118,3 +118,35 @@ class RawItemRepository:
 
     def count(self) -> int:
         return int(self._conn.execute("SELECT COUNT(*) AS n FROM raw_items").fetchone()["n"])
+
+    def list_unprocessed(
+        self,
+        *,
+        exclude_ids: set[UUID],
+        source_ids: list[str] | None = None,
+        limit: int | None = None,
+    ) -> list[RawItem]:
+        """Raw items that have not yet produced an article, oldest first.
+
+        Oldest-first matters for duplicate detection: the earliest version of a story
+        becomes the article that later copies are matched against, which keeps the
+        canonical choice stable across runs.
+        """
+        sql = "SELECT * FROM raw_items"
+        params: list[object] = []
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            sql += f" WHERE source_id IN ({placeholders})"
+            params.extend(source_ids)
+        sql += " ORDER BY COALESCE(published_at, fetched_at), id"
+
+        rows = self._conn.execute(sql, tuple(params)).fetchall()
+        items: list[RawItem] = []
+        for row in rows:
+            item = _to_domain(row)
+            if item.id in exclude_ids:
+                continue
+            items.append(item)
+            if limit is not None and len(items) >= limit:
+                break
+        return items

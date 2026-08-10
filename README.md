@@ -2,10 +2,11 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: Phase 2 of 7 — RSS/Atom ingestion.** The pipeline collects real items from five
-configured feeds and stores them with full provenance. There is no editorial filtering, no
-LLM integration and no Telegram integration yet. See
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phases.
+**Status: Phase 3 of 7 — deterministic candidate pipeline.** Collects from eight sources
+(RSS, HTML changelogs, Hacker News as community signal), normalizes items into editorial
+candidates, and deduplicates and screens them with deterministic rules. No LLM, no embeddings
+and no Telegram integration yet. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
+full design and the remaining phases.
 
 ## The rule this project is built around
 
@@ -55,30 +56,60 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news db status` | Show applied and pending migrations, plus row counts |
 | `ai-news sources` | List configured sources and what each is for |
 | `ai-news collect` | Fetch every enabled source and store new items |
+| `ai-news process` | Normalize, deduplicate and screen collected items |
+| `ai-news status` | Show the pipeline funnel from raw items to evaluation candidates |
 
 `collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
 parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
 failed, and `2` on a configuration or database problem.
+
+`process` accepts `--limit <n>` and `--source <id>`. Both commands are idempotent: running
+them repeatedly converges instead of accumulating.
 
 `python app.py <command>` works identically without installing the package.
 
 Commands for later phases (`evaluate`, `draft`, `review`, `publish`) are intentionally absent
 rather than present as stubs.
 
-## Sources
+## Sources and trust tiers
 
-Feeds are configured in [config/sources.yaml](config/sources.yaml) — human-editable, committed,
-and containing no secrets. Each entry declares an `adapter` (only `rss` exists so far), a
-`trust_tier`, and an `editorial_role` explaining why the source is in the mix.
+Sources are configured in [config/sources.yaml](config/sources.yaml) — human-editable,
+committed, and containing no secrets. Each entry declares an `adapter`, a `trust_tier`, and an
+`editorial_role` explaining why the source is in the mix.
 
-Ingestion is faithful to the source: text is stored exactly as the feed supplied it, missing
-fields stay missing rather than being invented, and every stored item traces back to its feed
-entry. Relevance filtering happens in later phases, not here.
+Three adapters exist: `rss` for feeds, `html_changelog` for vendors that publish no feed
+(driven by CSS selectors in config, never per-site code), and `hn_signal` for Hacker News.
 
-Re-running `collect` does not create duplicates. Identity is `(source_id, external_id)` using
-the feed's own guid, falling back to a deterministic hash of the entry link. Conditional GET
-(`ETag` / `Last-Modified`) is used when a server supports it, but correctness never depends on
-it — two of the five configured feeds send no validators at all.
+| Trust tier | What it means |
+|---|---|
+| `OFFICIAL` | The vendor's own announcement |
+| `REPUTABLE_SECONDARY` | Established media reporting on it |
+| `COMMUNITY_SIGNAL` | People are discussing it |
+
+**Collection is not verification.** A trust tier records *where a claim came from*, never
+whether it is true. Community signals are stored in their own table, can never become article
+content, and are refused by the normalizer outright — a Hacker News thread is evidence of
+attention and nothing else. Deciding what to believe is a later phase, and it will always end
+at a human.
+
+## How processing works
+
+`collect` stores faithful `RawItem` records; `process` derives `Article` candidates from them.
+Raw items are never mutated, so every article traces back to the bytes that produced it.
+
+Normalization is strictly mechanical — decode entities, strip markup, collapse whitespace,
+canonicalize the URL, compute fingerprints. Nothing is summarized, translated or invented; a
+missing publication date stays missing.
+
+Deduplication runs in layers, and every decision records *why*: identical canonical URL,
+identical content fingerprint, identical title from the same source, then SimHash within a
+bounded Hamming distance. Cross-source resemblance is recorded as a *possible* duplicate and
+deliberately not acted on — secondary reporting is worth keeping for corroboration later.
+
+The prefilter is deliberately narrow. It removes empty entries, navigation stubs, job posts and
+earnings notices, each with a machine-readable reason. It never filters on technicality: a
+deeply technical release can matter enormously to ordinary readers, and judging that is the
+LLM editor's job in a later phase, not a keyword list's.
 
 ## Tests
 

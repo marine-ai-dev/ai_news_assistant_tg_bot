@@ -171,8 +171,11 @@ class TestShippedConfiguration:
     def test_it_is_valid(self, shipped: SourcesConfig) -> None:
         assert shipped.sources
 
-    def test_it_configures_five_enabled_sources(self, shipped: SourcesConfig) -> None:
-        assert len(shipped.enabled()) == 5
+    def test_it_configures_eight_enabled_sources(self, shipped: SourcesConfig) -> None:
+        assert len(shipped.enabled()) == 8
+
+    def test_it_spans_every_adapter_kind(self, shipped: SourcesConfig) -> None:
+        assert {d.adapter for d in shipped.enabled()} == set(SourceKind)
 
     def test_every_source_uses_an_implemented_adapter(self, shipped: SourcesConfig) -> None:
         from ai_news_editor.sources.registry import supported_kinds
@@ -191,8 +194,23 @@ class TestShippedConfiguration:
         assert TrustTier.OFFICIAL in tiers
         assert TrustTier.REPUTABLE_SECONDARY in tiers
 
-    def test_no_community_signal_sources_yet(self, shipped: SourcesConfig) -> None:
-        assert all(not d.signal_only for d in shipped.sources)
+    def test_community_sources_are_always_signal_only(self, shipped: SourcesConfig) -> None:
+        """A community source must never be configured as an authoritative one."""
+        community = [d for d in shipped.sources if d.trust_tier is TrustTier.COMMUNITY_SIGNAL]
+        assert community
+        assert all(d.signal_only for d in community)
+
+    def test_only_community_sources_are_signal_only(self, shipped: SourcesConfig) -> None:
+        for definition in shipped.sources:
+            if definition.signal_only:
+                assert definition.trust_tier is TrustTier.COMMUNITY_SIGNAL
+
+    def test_html_sources_declare_a_breakage_threshold(self, shipped: SourcesConfig) -> None:
+        """A redesigned page must fail loudly rather than report zero items as success."""
+        for definition in shipped.sources:
+            if definition.adapter is SourceKind.HTML_CHANGELOG:
+                assert definition.options.get("min_expected_items", 0) >= 1
+                assert definition.options.get("item_selector")
 
     def test_contains_no_secret_shaped_values(self, shipped: SourcesConfig) -> None:
         """Comments may say the word "secrets"; no line may assign one."""

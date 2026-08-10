@@ -1277,7 +1277,56 @@ all of it every run is neither useful nor polite.
 than hiding editorial metadata in the adapter `config` blob. Both are consumed now, by
 the `sources` command and by collection reporting.
 
-### 26.7 One deliberate omission
+### 26.7 Phase 3 notes (normalization, dedupe, second-wave adapters)
+
+**The SimHash design in §17 was wrong and was corrected against measurement.** The plan
+specified 3-word shingles with a Hamming threshold of 3. Measured on realistic headline
+pairs, that combination is unusable — a single changed word rewrites three shingles at
+once, so genuine rewordings drifted to distance 18 while unrelated stories sat at 29.
+Feature sets were compared directly:
+
+| features | near-duplicates | unrelated | usable? |
+|---|---|---|---|
+| unigrams | 0–8 | 13–26 | weak separation |
+| **unigrams + bigrams** | **0–10** | **22–32** | **shipped** |
+| 3-word shingles (planned) | 0–18 | 29–34 | no |
+
+The threshold is therefore **12**, not 3.
+
+**That change killed the banding index.** §17 assumed candidate lookup by simhash bands.
+Banding only guarantees it finds a pair when the distance is below the band count, so at
+a threshold of 12 it silently misses real duplicates. The band columns were removed
+before shipping rather than kept as an index that quietly loses data. Near-duplicate
+candidates are bounded by the recency window plus a row cap — at MVP volumes a small
+indexed range scan. Exact-match layers (URL, content fingerprint, title fingerprint)
+stay fully indexed.
+
+**A publication-date guard was added after a real false positive.** On live data the
+pipeline flagged Google's May, June and July "latest AI news" round-ups as duplicates of
+each other: the texts differ by one word. They are genuinely different stories. Near
+duplicates must now also be contemporaneous — a recurring monthly column is not a
+duplicate. Both dates must be known for the guard to apply.
+
+**HTML sources: two shipped, two deferred.** Anthropic Newsroom and Notion Releases are
+server-rendered and read cleanly. Canva Newsroom and Perplexity Changelog both return
+403 to a plain request; per the "do not fight the website" rule they were deferred, not
+worked around. Selectors target semantic elements and CSS-module local names, because
+both shipped sites use build-hashed class names that change on every deploy.
+
+**Hacker News is modelled as enrichment, not a source.** It uses the same adapter
+contract and lands in `raw_items` for provenance, but the normalizer refuses to derive
+articles from any `signal_only` source. Its records become `community_signals` rows,
+matched to articles by canonical URL. Point counts are a snapshot from first
+observation — ingestion identity prevents re-recording, so scores do not track upward.
+
+**Storage codec for SimHash.** SQLite's `INTEGER` is signed 64-bit while a simhash is
+unsigned, so hashes with the top bit set overflowed on insert. `storage/codecs.py`
+reinterprets the bits at the boundary; Hamming distance is unaffected.
+
+**`DuplicateCandidate` lives in the domain layer** so that storage and pipeline can both
+use it without storage importing pipeline, which would break the dependency rule.
+
+### 26.8 One deliberate omission
 
 `draft_versions.category` has no `CHECK` constraint, unlike `audience` and every status
 column. The category vocabulary is editorial and expected to change as the channel

@@ -11,6 +11,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import pytest
@@ -18,9 +19,30 @@ import pytest
 from ai_news_editor.domain.enums import FetchOutcome, SourceKind
 from ai_news_editor.domain.models import RawItem, Source
 from ai_news_editor.sources.base import FetchContext, FetchResult, SourceAdapter
+from ai_news_editor.sources.config import load_sources_config
 from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.sources.registry import build_adapter, supported_kinds
-from tests.conftest import feed_bytes, make_http_client, rss_source, static_transport
+from tests.conftest import (
+    feed_bytes,
+    hn_bytes,
+    html_bytes,
+    make_http_client,
+    rss_source,
+    static_transport,
+)
+
+REPO_CONFIG = Path(__file__).resolve().parents[2] / "config" / "sources.yaml"
+
+
+def html_source() -> Source:
+    """A source using the real shipped Anthropic selectors."""
+    config = load_sources_config(REPO_CONFIG)
+    return config.get("anthropic_news").to_source(config.defaults)
+
+
+def hn_source() -> Source:
+    config = load_sources_config(REPO_CONFIG)
+    return config.get("hackernews").to_source(config.defaults)
 
 
 @dataclass(frozen=True)
@@ -41,6 +63,20 @@ ADAPTER_CASES = [
         good_body=feed_bytes("rss_full.xml"),
         good_content_type="application/rss+xml",
         junk_body=feed_bytes("truncated.xml"),
+    ),
+    AdapterCase(
+        kind=SourceKind.HTML_CHANGELOG,
+        make_source=html_source,
+        good_body=html_bytes("anthropic_news.html"),
+        good_content_type="text/html",
+        junk_body=html_bytes("redesigned_no_items.html"),
+    ),
+    AdapterCase(
+        kind=SourceKind.HN_SIGNAL,
+        make_source=hn_source,
+        good_body=hn_bytes("stories.json"),
+        good_content_type="application/json",
+        junk_body=b"{not json at all",
     ),
 ]
 
@@ -98,9 +134,9 @@ class TestAdapterContract:
 
     def test_honours_the_item_cap(self, case: AdapterCase) -> None:
         capped = _adapter(case, case.good_body).fetch(
-            case.make_source(), FetchContext(run_id="r", max_items=1)
+            case.make_source(), FetchContext(run_id="r", max_items=2)
         )
-        assert len(capped.items) <= 1
+        assert len(capped.items) <= 2
 
     def test_malformed_input_is_a_typed_error_not_an_exception(
         self, case: AdapterCase, fetch_context: FetchContext
@@ -147,9 +183,7 @@ class TestAdapterContract:
 
     def test_adapter_takes_no_database_dependency(self, case: AdapterCase) -> None:
         adapter = _adapter(case, case.good_body)
-        assert not any(
-            isinstance(value, sqlite3.Connection) for value in vars(adapter).values()
-        )
+        assert not any(isinstance(value, sqlite3.Connection) for value in vars(adapter).values())
 
 
 def _row_counts(connection: sqlite3.Connection) -> dict[str, int]:
@@ -164,15 +198,17 @@ def _row_counts(connection: sqlite3.Connection) -> dict[str, int]:
 
 
 class TestRegistry:
-    def test_rss_is_the_only_implemented_kind_in_phase_2(self) -> None:
-        assert supported_kinds() == {SourceKind.RSS}
+    def test_every_declared_kind_now_has_an_adapter(self) -> None:
+        assert supported_kinds() == set(SourceKind)
 
     def test_unimplemented_kind_fails_loudly(self) -> None:
+        """A source configured for a kind with no adapter must not be silently skipped."""
         from ai_news_editor.domain.errors import ConfigurationError
+        from ai_news_editor.sources import registry
 
         client = make_http_client(static_transport(b""))
         with pytest.raises(ConfigurationError, match="no adapter implemented"):
-            build_adapter(SourceKind.HTML_CHANGELOG, client)
+            registry.build_adapter("NOT_A_REAL_KIND", client)  # type: ignore[arg-type]
 
     def test_builds_a_working_rss_adapter(self) -> None:
         adapter = build_adapter(SourceKind.RSS, make_http_client(static_transport(b"")))

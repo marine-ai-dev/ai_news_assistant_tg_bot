@@ -8,6 +8,7 @@ command that does not exist.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Annotated
 
 import typer
@@ -21,6 +22,8 @@ from ai_news_editor.health import all_ok, run_health_checks
 from ai_news_editor.observability.logging import configure_logging, current_run_id, new_run_id
 from ai_news_editor.pipeline.collect import CollectionReport, collection_timestamp
 from ai_news_editor.pipeline.collect import collect as collect_sources
+from ai_news_editor.pipeline.process import ProcessingReport, pipeline_stats
+from ai_news_editor.pipeline.process import process as run_processing
 from ai_news_editor.settings import Settings, get_settings
 from ai_news_editor.sources.config import SourcesConfig, load_sources_config
 from ai_news_editor.sources.http import HttpClient
@@ -183,22 +186,24 @@ def sources() -> None:
     settings = _load_settings()
     config = _load_sources_config(settings)
 
-    table = Table(title="Configured sources")
-    table.add_column("ID", no_wrap=True)
-    table.add_column("Adapter", no_wrap=True)
-    table.add_column("Trust", no_wrap=True)
-    table.add_column("Enabled", no_wrap=True)
-    table.add_column("Editorial role", overflow="fold")
+    table = Table(title="Configured sources", show_lines=True)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Kind / trust", no_wrap=True)
+    table.add_column("Editorial role", ratio=1)
 
     for definition in config.sources:
+        marker = "" if definition.enabled else " [dim](disabled)[/dim]"
+        trust = definition.trust_tier.value.replace("_", " ").lower()
         table.add_row(
-            definition.id,
-            definition.adapter.value,
-            definition.trust_tier.value,
-            "yes" if definition.enabled else "no",
+            f"{definition.id}{marker}",
+            f"{definition.adapter.value.lower()}\n[dim]{trust}[/dim]",
             " ".join(definition.editorial_role.split()),
         )
     console.print(table)
+    console.print(
+        "[dim]Trust tier is provenance metadata, not a verdict on truth: it records where a "
+        "claim came from. Community signals never establish that a claim is true.[/dim]"
+    )
 
 
 @app.command()
@@ -220,18 +225,8 @@ def collect(
     """
     settings = _load_settings()
     config = _load_sources_config(settings)
-    path = settings.resolved_database_path
-
-    if not path.exists():
-        err_console.print(f"No database at [bold]{path}[/bold]. Run 'ai-news db init'.")
-        raise typer.Exit(code=2)
-
-    connection = db.connect(path)
+    connection = _open_migrated_database()
     try:
-        if db.pending_migrations(connection):
-            err_console.print("Database schema is out of date. Run 'ai-news db migrate'.")
-            raise typer.Exit(code=2)
-
         with HttpClient(timeout=config.defaults.timeout_seconds) as http:
             report = collect_sources(
                 connection,
@@ -310,6 +305,115 @@ def _render_collection(report: CollectionReport) -> None:
     )
     if report.failed:
         console.print("[yellow]Collection completed with failures (exit code 1).[/yellow]")
+
+
+@app.command()
+def process(
+    limit: Annotated[
+        int | None, typer.Option("--limit", "-n", help="Process at most this many raw items.")
+    ] = None,
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", "-s", help="Process only this source id. Repeatable."),
+    ] = None,
+) -> None:
+    """Turn collected raw items into deduplicated editorial candidates.
+
+    Deterministic and resumable: normalization, duplicate detection and rule-based
+    screening only. No LLM is involved, and nothing here decides whether a story is
+    interesting — that is a later phase.
+    """
+    connection = _open_migrated_database()
+    try:
+        report = run_processing(
+            connection, limit=limit, source_ids=list(source) if source else None
+        )
+    except AiNewsError as exc:
+        err_console.print(f"[bold red]Processing failed:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    finally:
+        connection.close()
+
+    _render_processing(report)
+
+
+@app.command()
+def status() -> None:
+    """Show the pipeline funnel: what has been collected, processed and screened."""
+    connection = _open_migrated_database()
+    try:
+        stats = pipeline_stats(connection)
+    finally:
+        connection.close()
+
+    table = Table(title="Pipeline")
+    table.add_column("Stage")
+    table.add_column("Count", justify="right")
+    rows = (
+        ("Raw items collected", stats["raw_items"]),
+        ("  not yet processed", stats["unprocessed"]),
+        ("Articles created", stats["articles"]),
+        ("  duplicates", stats["duplicates"]),
+        ("  screened out", stats["screened_out"]),
+        ("  awaiting AI evaluation", stats["awaiting_evaluation"]),
+        ("Community signals", stats["community_signals"]),
+        ("  matched to an article", stats["signals_attached"]),
+    )
+    for label, value in rows:
+        table.add_row(label, str(value))
+    console.print(table)
+    console.print(
+        "[dim]Community signals are attention metadata. They are never provenance for a "
+        "claim and never become article content.[/dim]"
+    )
+
+
+def _open_migrated_database() -> sqlite3.Connection:
+    """Open the database, refusing to proceed on a stale schema."""
+    settings = _load_settings()
+    path = settings.resolved_database_path
+    if not path.exists():
+        err_console.print(f"No database at [bold]{path}[/bold]. Run 'ai-news db init'.")
+        raise typer.Exit(code=2)
+
+    connection = db.connect(path)
+    if db.pending_migrations(connection):
+        connection.close()
+        err_console.print("Database schema is out of date. Run 'ai-news db migrate'.")
+        raise typer.Exit(code=2)
+    return connection
+
+
+def _render_processing(report: ProcessingReport) -> None:
+    console.print("\n[bold]AI NEWS - PROCESSING[/bold]")
+
+    table = Table()
+    table.add_column("Stage")
+    table.add_column("Count", justify="right")
+    table.add_row("Raw items considered", str(report.considered))
+    table.add_row("Articles normalized", str(report.normalized))
+    table.add_row("  exact duplicates", str(report.exact_duplicates))
+    table.add_row("  near duplicates", str(report.near_duplicates))
+    table.add_row("  possible cross-source", str(report.possible_cross_source))
+    table.add_row("  screened out", str(report.screened_out))
+    table.add_row("Ready for evaluation", str(report.ready))
+    if report.rejected:
+        table.add_row("Could not normalize", str(report.rejected))
+    if report.signals_recorded or report.signals_attached:
+        table.add_row("Community signals recorded", str(report.signals_recorded))
+        table.add_row("  matched to an article", str(report.signals_attached))
+    console.print(table)
+
+    if report.screening_reasons:
+        reasons = Table(title="Screening reasons")
+        reasons.add_column("Reason")
+        reasons.add_column("Count", justify="right")
+        for reason, count in sorted(report.screening_reasons.items()):
+            reasons.add_row(reason, str(count))
+        console.print(reasons)
+
+    for rejection in report.rejections[:10]:
+        console.print(f"[yellow]could not normalize:[/yellow] {rejection}")
 
 
 if __name__ == "__main__":

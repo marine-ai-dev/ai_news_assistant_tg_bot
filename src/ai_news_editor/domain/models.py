@@ -26,7 +26,9 @@ from ai_news_editor.domain.enums import (
     AudienceTier,
     Category,
     DraftStatus,
+    DuplicateReason,
     FetchOutcome,
+    PrefilterReason,
     ReviewAction,
     SourceKind,
     TrustTier,
@@ -115,10 +117,20 @@ class Article(DomainModel):
     clean_text: str | None = None
     language: str | None = None
     published_at: UtcDatetime | None = None
+    #: Fingerprint of normalized title + body. Exact-duplicate detection (layer 1).
     content_hash: str | None = None
+    #: Fingerprint of the normalized title alone, for same-source repeats.
+    title_fingerprint: str | None = None
+    #: 64-bit simhash of the text, for near-duplicate detection (layer 2).
+    simhash: int | None = None
     duplicate_of_id: UUID | None = None
+    duplicate_reason: DuplicateReason | None = None
+    #: A conservative cross-source match. Recorded, never acted on: secondary reporting
+    #: is kept because it is useful for corroboration later, not deleted as redundant.
+    possible_duplicate_of_id: UUID | None = None
     status: ArticleStatus = ArticleStatus.COLLECTED
-    filtered_by: str | None = None
+    filtered_by: PrefilterReason | None = None
+    normalized_at: UtcDatetime | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
     updated_at: UtcDatetime = Field(default_factory=now_utc)
 
@@ -126,7 +138,28 @@ class Article(DomainModel):
     def _duplicate_is_not_self(self) -> Self:
         if self.duplicate_of_id is not None and self.duplicate_of_id == self.id:
             raise ValueError("an article cannot be a duplicate of itself")
+        if self.possible_duplicate_of_id is not None and self.possible_duplicate_of_id == self.id:
+            raise ValueError("an article cannot be a possible duplicate of itself")
         return self
+
+
+class DuplicateCandidate(ImmutableDomainModel):
+    """An already-stored article reduced to the features duplicate detection needs.
+
+    A projection rather than a full :class:`Article`: comparing candidates never needs
+    the body text, and loading it for every neighbour would be wasteful. Lives in the
+    domain so storage and pipeline can both use it without depending on each other.
+    """
+
+    id: UUID
+    source_id: NonEmptyStr
+    canonical_url: NonEmptyStr
+    trust_tier: TrustTier
+    content_hash: str | None = None
+    title_fingerprint: str | None = None
+    simhash: int | None = None
+    published_at: UtcDatetime | None = None
+    text_length: int = 0
 
 
 class DraftVersion(ImmutableDomainModel):
@@ -175,6 +208,34 @@ class Draft(DomainModel):
     current_version_id: UUID | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
     updated_at: UtcDatetime = Field(default_factory=now_utc)
+
+
+class CommunitySignal(ImmutableDomainModel):
+    """Evidence that a community is discussing a story.
+
+    Attention metadata, never provenance. A signal can say "people are talking about
+    this", which may make a story worth investigating or indicate virality — it can
+    never establish that a claim is true, and it never becomes article content.
+    Signals live in their own table precisely so they cannot be mistaken for sources.
+
+    Counts are a snapshot from when the signal was first observed; ingestion identity
+    prevents the same discussion being re-recorded, so scores do not track upward.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    source_id: NonEmptyStr
+    external_id: NonEmptyStr
+    #: Set when the linked URL matches a collected article. Null means we saw the
+    #: discussion but hold no article for it — kept for Phase 4 rather than discarded.
+    article_id: UUID | None = None
+    canonical_url: str | None = None
+    title: str | None = None
+    points: int | None = None
+    num_comments: int | None = None
+    author: str | None = None
+    posted_at: UtcDatetime | None = None
+    discussion_url: str | None = None
+    observed_at: UtcDatetime = Field(default_factory=now_utc)
 
 
 class SourceFetchState(DomainModel):

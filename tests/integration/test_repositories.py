@@ -13,6 +13,7 @@ from ai_news_editor.domain.enums import (
     Category,
     DraftStatus,
     FetchOutcome,
+    PrefilterReason,
 )
 from ai_news_editor.domain.errors import (
     EntityNotFoundError,
@@ -180,9 +181,11 @@ class TestArticleRepository:
     ) -> None:
         articles.set_status(seeded_article.id, ArticleStatus.NORMALIZED)
         updated = articles.set_status(
-            seeded_article.id, ArticleStatus.SCREENED_OUT, filtered_by="rule.benchmark_noise"
+            seeded_article.id,
+            ArticleStatus.SCREENED_OUT,
+            filtered_by=PrefilterReason.BOILERPLATE.value,
         )
-        assert updated.filtered_by == "rule.benchmark_noise"
+        assert updated.filtered_by is PrefilterReason.BOILERPLATE
 
     def test_marking_a_duplicate(
         self,

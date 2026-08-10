@@ -162,9 +162,7 @@ class TestIdempotency:
         )
         assert RawItemRepository(connection).count() == 2
 
-        second = run(
-            connection, {"alpha.invalid": rss_response()}, cfg=config(only_alpha=True)
-        )
+        second = run(connection, {"alpha.invalid": rss_response()}, cfg=config(only_alpha=True))
         assert second.inserted == 2
         assert RawItemRepository(connection).count() == 4
 
@@ -243,9 +241,7 @@ class TestConditionalFetching:
         run(connection, {"alpha.invalid": httpx.Response(304)}, cfg=config(only_alpha=True))
         assert SourceFetchStateRepository(connection).get("alpha").etag == 'W/"keep"'
 
-    def test_a_feed_without_validators_still_collects(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_a_feed_without_validators_still_collects(self, connection: sqlite3.Connection) -> None:
         """Several real feeds send no ETag; correctness must not depend on conditional GET."""
         report = run(connection, {"alpha.invalid": rss_response()}, cfg=config(only_alpha=True))
         state = SourceFetchStateRepository(connection).get("alpha")
@@ -307,18 +303,14 @@ class TestFailureIsolation:
         assert report.sources[0].outcome is FetchOutcome.ERROR
         assert "parse" in (report.sources[0].error or "")
 
-    def test_failures_are_never_silently_swallowed(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_failures_are_never_silently_swallowed(self, connection: sqlite3.Connection) -> None:
         report = run(
             connection, {"alpha.invalid": httpx.Response(500)}, cfg=config(only_alpha=True)
         )
         assert report.sources[0].error
         assert not report.all_ok
 
-    def test_failure_state_is_persisted_and_counted(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_failure_state_is_persisted_and_counted(self, connection: sqlite3.Connection) -> None:
         for _ in range(2):
             run(connection, {"alpha.invalid": httpx.Response(500)}, cfg=config(only_alpha=True))
         state = SourceFetchStateRepository(connection).get("alpha")
@@ -335,9 +327,7 @@ class TestFailureIsolation:
         assert state.last_outcome is FetchOutcome.OK
         assert state.last_error is None
 
-    def test_a_failure_keeps_the_previous_validators(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_a_failure_keeps_the_previous_validators(self, connection: sqlite3.Connection) -> None:
         """A transient outage must not force a full re-download once the source returns."""
         run(
             connection,
@@ -363,9 +353,7 @@ class TestSourceSelection:
         with pytest.raises(ConfigurationError, match="unknown source id"):
             run(connection, {"alpha.invalid": rss_response()}, source_ids=["ghost"])
 
-    def test_disabled_sources_are_skipped_by_default(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_disabled_sources_are_skipped_by_default(self, connection: sqlite3.Connection) -> None:
         data = {
             **TWO_SOURCES,
             "sources": [TWO_SOURCES["sources"][0], {**TWO_SOURCES["sources"][1], "enabled": False}],
@@ -440,9 +428,7 @@ class TestDryRun:
         assert report.sources[0].inserted == 0
         assert report.sources[0].existing == 3
 
-    def test_a_real_run_after_a_dry_run_still_inserts(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_a_real_run_after_a_dry_run_still_inserts(self, connection: sqlite3.Connection) -> None:
         run(
             connection,
             {"alpha.invalid": rss_response()},
@@ -464,9 +450,7 @@ class TestReportTotals:
         assert report.existing == 1
         assert report.run_id == "testrun"
 
-    def test_all_ok_is_false_when_any_source_fails(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_all_ok_is_false_when_any_source_fails(self, connection: sqlite3.Connection) -> None:
         report = run(
             connection,
             {"alpha.invalid": httpx.Response(500), "beta.invalid": rss_response()},
@@ -477,9 +461,7 @@ class TestReportTotals:
 class TestNoEditorialProcessing:
     """Phase 2 is ingestion only: nothing downstream may be produced yet."""
 
-    def test_collection_creates_no_articles_or_drafts(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_collection_creates_no_articles_or_drafts(self, connection: sqlite3.Connection) -> None:
         run(connection, {"alpha.invalid": rss_response(), "beta.invalid": rss_response()})
         for table in ("articles", "drafts", "draft_versions", "review_decisions"):
             count = connection.execute(

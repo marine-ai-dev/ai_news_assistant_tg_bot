@@ -238,3 +238,17 @@ DRAFT_CONTENT: dict[str, object] = {
     "source_attribution": "Example — https://example.invalid/item",
     "created_by": "test",
 }
+
+
+FIXTURE_HTML = Path(__file__).parent / "fixtures" / "html"
+FIXTURE_HN = Path(__file__).parent / "fixtures" / "hn"
+
+
+def html_bytes(name: str) -> bytes:
+    """Read a recorded HTML page fixture."""
+    return (FIXTURE_HTML / name).read_bytes()
+
+
+def hn_bytes(name: str) -> bytes:
+    """Read a recorded Hacker News API fixture."""
+    return (FIXTURE_HN / name).read_bytes()

@@ -314,11 +314,101 @@ class TestSourcesCommand:
         assert result.exit_code == 0
         assert "openai_news" in output_of(result)
 
-    def test_shows_the_editorial_role(self) -> None:
-        assert "ChatGPT" in output_of(runner.invoke(app, ["sources"]))
+    def test_every_source_declares_an_editorial_role(self) -> None:
+        """Asserted on the configuration, not the rendering: Rich wraps narrow columns."""
+        from ai_news_editor.sources.config import load_sources_config
+
+        config = load_sources_config(REPO_CONFIG)
+        assert all(len(d.editorial_role.strip()) > 20 for d in config.sources)
+
+    def test_explains_what_trust_tier_means(self) -> None:
+        assert "provenance metadata" in output_of(runner.invoke(app, ["sources"]))
 
     def test_lists_every_configured_source(self) -> None:
         output = output_of(runner.invoke(app, ["sources"]))
         for source_id in ("openai_news", "google_ai_blog", "huggingface_blog",
-                          "microsoft_365_blog", "techcrunch_ai"):
+                          "microsoft_365_blog", "techcrunch_ai", "anthropic_news",
+                          "notion_releases", "hackernews"):
             assert source_id in output
+
+
+class TestProcessAndStatusCommands:
+    def _seed(self, tmp_path: Path) -> None:
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            connection.execute(
+                "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+                "VALUES ('alpha', 'Alpha', 'RSS', 'https://alpha.invalid/f', 'OFFICIAL', "
+                "'2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')"
+            )
+            for i in range(3):
+                connection.execute(
+                    "INSERT INTO raw_items (id, source_id, external_id, title_original, "
+                    "url_original, summary_raw, payload_raw, content_type, fetched_at) "
+                    "VALUES (?, 'alpha', ?, ?, ?, ?, '{}', 'application/rss+xml', "
+                    "'2026-08-01T00:00:00+00:00')",
+                    (
+                        f"00000000-0000-4000-8000-00000000000{i}",
+                        f"e{i}",
+                        f"Headline number {i} about an AI product update",
+                        f"https://alpha.invalid/story-{i}",
+                        f"Distinct body number {i} with enough words to fingerprint reliably here",
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def test_process_reports_the_funnel(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+
+        result = runner.invoke(app, ["process"])
+        assert result.exit_code == 0
+        output = output_of(result)
+        assert "PROCESSING" in output
+        assert "Ready for evaluation" in output
+
+    def test_process_is_idempotent(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["process"])
+
+        second = runner.invoke(app, ["process"])
+        assert second.exit_code == 0
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            assert connection.execute("SELECT COUNT(*) AS n FROM articles").fetchone()["n"] == 3
+        finally:
+            connection.close()
+
+    def test_process_requires_a_database(self) -> None:
+        result = runner.invoke(app, ["process"])
+        assert result.exit_code == 2
+        assert "db init" in output_of(result)
+
+    def test_status_shows_pipeline_counts(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["process"])
+
+        result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        output = output_of(result)
+        assert "Raw items collected" in output
+        assert "awaiting AI evaluation" in output
+
+    def test_status_explains_community_signal_semantics(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        assert "never provenance" in output_of(runner.invoke(app, ["status"]))
+
+    def test_process_limit_option(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["process", "--limit", "1"])
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            assert connection.execute("SELECT COUNT(*) AS n FROM articles").fetchone()["n"] == 1
+        finally:
+            connection.close()

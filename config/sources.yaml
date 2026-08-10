@@ -83,3 +83,74 @@ sources:
       controversies, failures, deepfakes, scams and viral oddities. The main supply of
       non-announcement material.
     tags: [industry, consumer, controversy, viral]
+
+  # --- HTML changelog sources -------------------------------------------------
+  # These vendors publish no usable feed, so their listing pages are read directly
+  # with CSS selectors. Selectors target semantic elements (h2/h4, time, p) rather
+  # than class names: both sites use build-hashed CSS-module classes that change on
+  # every deploy. `min_expected_items` turns a redesign into a loud failure instead
+  # of a silent zero-item "success".
+
+  - id: anthropic_news
+    name: Anthropic News
+    enabled: true
+    adapter: html_changelog
+    url: https://www.anthropic.com/news
+    trust_tier: OFFICIAL
+    publisher: Anthropic
+    editorial_role: >-
+      Claude product announcements and company news. Anthropic publishes no public
+      news feed, so the newsroom listing page is read directly.
+    tags: [product_update, claude, official]
+    options:
+      # The newsroom has two layouts: a featured grid using headings, and a list
+      # where the title sits in a span. Both are matched. The `__title` fragment is
+      # the CSS-module local name, which is stable across builds — only the hash
+      # around it changes.
+      item_selector: 'a[href^="/news/"]'
+      title_selector: 'h2, h3, h4, [class*="__title"]'
+      link_selector: ':self'
+      date_selector: 'time'
+      summary_selector: 'p'
+      min_expected_items: 3
+
+  - id: notion_releases
+    name: Notion Releases
+    enabled: true
+    adapter: html_changelog
+    url: https://www.notion.com/releases
+    trust_tier: OFFICIAL
+    publisher: Notion
+    editorial_role: >-
+      Notion AI and product release notes — small, concrete changes in a tool many
+      non-technical people use daily. No feed is published.
+    tags: [product_update, notion, ai_for_work, official]
+    options:
+      item_selector: 'a[href^="/releases/"]'
+      title_selector: 'h2'
+      link_selector: ':self'
+      date_from_url: '/releases/(\d{4}-\d{2}-\d{2})'
+      min_expected_items: 3
+
+  # --- Community signal -------------------------------------------------------
+  # Attention only. Never provenance, never article content: signal_only sources are
+  # refused by the normalizer and can only produce community_signals rows.
+
+  - id: hackernews
+    name: Hacker News (AI stories)
+    enabled: true
+    adapter: hn_signal
+    url: https://hn.algolia.com/api/v1/search_by_date
+    trust_tier: COMMUNITY_SIGNAL
+    signal_only: true
+    publisher: Hacker News
+    editorial_role: >-
+      Tells us the tech community is suddenly discussing a story, which can indicate
+      virality or that something is worth investigating. It never establishes that a
+      claim is true and never supplies article text.
+    tags: [community, attention, signal]
+    options:
+      queries: ["artificial intelligence", "ChatGPT", "Claude AI", "Gemini AI"]
+      window_hours: 72
+      hits_per_query: 40
+      min_points: 5

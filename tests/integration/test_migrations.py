@@ -178,10 +178,10 @@ class TestPragmas:
 class TestMigration002:
     """Phase-2 additions apply cleanly on a fresh database and on an existing one."""
 
-    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+    def test_fresh_install_includes_the_phase_2_tables(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh2.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2]
+        assert [m.version for m in applied][:2] == [1, 2]
         assert "source_fetch_state" in _tables(conn)
 
     def test_upgrade_from_a_phase_1_database(self, tmp_path: Path) -> None:
@@ -204,8 +204,8 @@ class TestMigration002:
         )
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [2]
-        assert db.schema_version(conn) == 2
+        assert applied[0].version == 2
+        assert db.schema_version(conn) == len(db.discover_migrations())
         assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
 
     def test_new_source_columns_have_workable_defaults(self, tmp_path: Path) -> None:
@@ -243,3 +243,83 @@ class TestMigration002:
         text = (db.MIGRATIONS_DIR / "001_initial.sql").read_text(encoding="utf-8")
         assert "source_fetch_state" not in text
         assert "editorial_role" not in text
+
+
+class TestMigration003:
+    """Phase-3 additions apply cleanly on a fresh database and on a Phase-2 one."""
+
+    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+        conn = db.connect(tmp_path / "fresh3.sqlite3")
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [1, 2, 3]
+        assert "community_signals" in _tables(conn)
+
+    def test_upgrade_from_a_phase_2_database(self, tmp_path: Path) -> None:
+        """A database that stopped at 002 must upgrade without losing data."""
+        staged = tmp_path / "upto_002"
+        staged.mkdir()
+        for name in ("001_initial.sql", "002_source_fetch_state.sql"):
+            (staged / name).write_text(
+                (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        conn = db.connect(tmp_path / "upgrade3.sqlite3")
+        db.migrate(conn, staged)
+        assert db.schema_version(conn) == 2
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+            "VALUES ('legacy', 'Legacy', 'RSS', 'https://legacy.invalid', 'OFFICIAL', "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [3]
+        assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
+
+    def test_new_article_columns_exist(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(articles)").fetchall()
+        }
+        assert {
+            "title_fingerprint",
+            "simhash",
+            "duplicate_reason",
+            "possible_duplicate_of_id",
+            "normalized_at",
+        } <= columns
+
+    def test_community_signals_require_a_real_source(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO community_signals (id, source_id, external_id, observed_at) "
+                "VALUES ('x', 'ghost', 'e1', 'now')"
+            )
+
+    def test_a_discussion_is_recorded_once_per_source(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        connection.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, signal_only, "
+            "created_at, updated_at) VALUES ('hn', 'HN', 'HN_SIGNAL', "
+            "'https://hn.invalid', 'COMMUNITY_SIGNAL', 1, 'now', 'now')"
+        )
+        connection.execute(
+            "INSERT INTO community_signals (id, source_id, external_id, observed_at) "
+            "VALUES ('a', 'hn', 'story-1', 'now')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO community_signals (id, source_id, external_id, observed_at) "
+                "VALUES ('b', 'hn', 'story-1', 'now')"
+            )
+
+    def test_earlier_migrations_were_not_altered(self) -> None:
+        """History stays immutable; 003 is additive only."""
+        first = (db.MIGRATIONS_DIR / "001_initial.sql").read_text(encoding="utf-8")
+        second = (db.MIGRATIONS_DIR / "002_source_fetch_state.sql").read_text(encoding="utf-8")
+        assert "community_signals" not in first
+        assert "community_signals" not in second
+        assert "simhash" not in first
+        assert "simhash" not in second

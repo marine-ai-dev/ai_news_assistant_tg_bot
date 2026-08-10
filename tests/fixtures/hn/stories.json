@@ -1,0 +1,49 @@
+{
+  "hits": [
+    {
+      "objectID": "49243709",
+      "title": "Rogue AI agent hacks gym to get its user a spot in a class",
+      "url": "https://example.invalid/tech/rogue-agent?utm_source=hn",
+      "points": 412,
+      "num_comments": 233,
+      "author": "mellosouls",
+      "created_at": "2026-08-10T13:54:55Z",
+      "created_at_i": 1786370095,
+      "story_id": 49243709
+    },
+    {
+      "objectID": "49240001",
+      "title": "OpenAI ships a new ChatGPT feature",
+      "url": "https://openai.invalid/index/new-feature",
+      "points": 250,
+      "num_comments": 98,
+      "author": "someone",
+      "created_at": "2026-08-09T09:00:00Z",
+      "created_at_i": 1786266000,
+      "story_id": 49240001
+    },
+    {
+      "objectID": "49239999",
+      "title": "Ask HN: how do you use AI day to day?",
+      "url": null,
+      "points": 90,
+      "num_comments": 310,
+      "author": "curious",
+      "created_at": "2026-08-09T08:00:00Z",
+      "created_at_i": 1786262400
+    },
+    {
+      "objectID": "49239998",
+      "title": "",
+      "url": "https://example.invalid/no-title",
+      "points": 12,
+      "num_comments": 1,
+      "author": "x",
+      "created_at": "2026-08-09T07:00:00Z",
+      "created_at_i": 1786258800
+    }
+  ],
+  "nbHits": 4,
+  "page": 0,
+  "hitsPerPage": 40
+}
