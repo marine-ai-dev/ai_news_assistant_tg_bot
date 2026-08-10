@@ -15,10 +15,15 @@ from rich.console import Console
 from rich.table import Table
 
 from ai_news_editor import __version__
+from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.health import all_ok, run_health_checks
-from ai_news_editor.observability.logging import configure_logging, new_run_id
+from ai_news_editor.observability.logging import configure_logging, current_run_id, new_run_id
+from ai_news_editor.pipeline.collect import CollectionReport, collection_timestamp
+from ai_news_editor.pipeline.collect import collect as collect_sources
 from ai_news_editor.settings import Settings, get_settings
+from ai_news_editor.sources.config import SourcesConfig, load_sources_config
+from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.storage import db
 
 console = Console()
@@ -170,6 +175,141 @@ def db_status() -> None:
         console.print(counts)
     finally:
         connection.close()
+
+
+@app.command()
+def sources() -> None:
+    """List configured sources and their last fetch outcome."""
+    settings = _load_settings()
+    config = _load_sources_config(settings)
+
+    table = Table(title="Configured sources")
+    table.add_column("ID", no_wrap=True)
+    table.add_column("Adapter", no_wrap=True)
+    table.add_column("Trust", no_wrap=True)
+    table.add_column("Enabled", no_wrap=True)
+    table.add_column("Editorial role", overflow="fold")
+
+    for definition in config.sources:
+        table.add_row(
+            definition.id,
+            definition.adapter.value,
+            definition.trust_tier.value,
+            "yes" if definition.enabled else "no",
+            " ".join(definition.editorial_role.split()),
+        )
+    console.print(table)
+
+
+@app.command()
+def collect(
+    source: Annotated[
+        list[str] | None,
+        typer.Option("--source", "-s", help="Collect only this source id. Repeatable."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Fetch and parse, but write nothing to the database."),
+    ] = False,
+) -> None:
+    """Fetch configured sources and store new items.
+
+    Collects every enabled source by default. Ingestion only: items are stored with
+    their provenance exactly as the feed supplied them. No filtering, ranking or
+    rewriting happens here.
+    """
+    settings = _load_settings()
+    config = _load_sources_config(settings)
+    path = settings.resolved_database_path
+
+    if not path.exists():
+        err_console.print(f"No database at [bold]{path}[/bold]. Run 'ai-news db init'.")
+        raise typer.Exit(code=2)
+
+    connection = db.connect(path)
+    try:
+        if db.pending_migrations(connection):
+            err_console.print("Database schema is out of date. Run 'ai-news db migrate'.")
+            raise typer.Exit(code=2)
+
+        with HttpClient(timeout=config.defaults.timeout_seconds) as http:
+            report = collect_sources(
+                connection,
+                http,
+                config,
+                run_id=current_run_id() or "-",
+                source_ids=list(source) if source else None,
+                dry_run=dry_run,
+            )
+    except AiNewsError as exc:
+        err_console.print(f"[bold red]Collection failed:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    finally:
+        connection.close()
+
+    _render_collection(report)
+
+    if not report.all_ok:
+        raise typer.Exit(code=1)
+
+
+def _load_sources_config(settings: Settings) -> SourcesConfig:
+    try:
+        return load_sources_config(settings.sources_config_path)
+    except AiNewsError as exc:
+        err_console.print(f"[bold red]Configuration error:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+
+def _render_collection(report: CollectionReport) -> None:
+    heading = "AI NEWS - COLLECTION" + (" (dry run - nothing written)" if report.dry_run else "")
+    console.print(f"\n[bold]{heading}[/bold]  {collection_timestamp()}")
+
+    table = Table(show_footer=False)
+    table.add_column("Source", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("Fetched", justify="right")
+    table.add_column("New", justify="right")
+    table.add_column("Known", justify="right")
+    table.add_column("Detail", overflow="fold")
+
+    for item in report.sources:
+        if item.outcome is FetchOutcome.ERROR:
+            status = "[red]ERROR[/red]"
+            detail = item.error or ""
+        elif item.outcome is FetchOutcome.NOT_MODIFIED:
+            status = "[cyan]304[/cyan]"
+            detail = "not modified since last fetch"
+        else:
+            status = "[green]OK[/green]"
+            detail = f"{item.duration_ms} ms"
+            if item.warnings:
+                detail += f" - {len(item.warnings)} warning(s)"
+        table.add_row(
+            item.source_id,
+            status,
+            str(item.fetched),
+            str(item.inserted),
+            str(item.existing),
+            detail,
+        )
+
+    console.print(table)
+
+    verb = "would be new" if report.dry_run else "new raw items"
+    console.print(
+        f"Sources checked: [bold]{len(report.sources)}[/bold]   "
+        f"succeeded: [green]{report.succeeded}[/green]   "
+        f"failed: {'[red]' if report.failed else ''}{report.failed}"
+        f"{'[/red]' if report.failed else ''}"
+    )
+    console.print(
+        f"Fetched entries: [bold]{report.fetched}[/bold]   "
+        f"{verb}: [bold]{report.inserted}[/bold]   "
+        f"already known: [bold]{report.existing}[/bold]"
+    )
+    if report.failed:
+        console.print("[yellow]Collection completed with failures (exit code 1).[/yellow]")
 
 
 if __name__ == "__main__":

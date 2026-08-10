@@ -36,6 +36,19 @@ class TrustTier(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+class FetchOutcome(StrEnum):
+    """Result of one attempt to read a source.
+
+    ``NOT_MODIFIED`` is a *success*: the server confirmed nothing changed, so there is
+    no body to parse and no new items. Treating it as an error would make every
+    well-behaved cached fetch look like a failure.
+    """
+
+    OK = "OK"
+    NOT_MODIFIED = "NOT_MODIFIED"
+    ERROR = "ERROR"
+
+
 class ArticleStatus(StrEnum):
     """Triage lifecycle of source material."""
 

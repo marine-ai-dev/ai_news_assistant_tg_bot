@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Sparse Feed</title>
+    <link>https://sparse.invalid/</link>
+    <description>Entries with almost no metadata.</description>
+    <item>
+      <title>No guid, no author, no date</title>
+      <link>https://sparse.invalid/a</link>
+    </item>
+    <item>
+      <title>Also nothing but a link</title>
+      <link>https://sparse.invalid/b</link>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,85 @@
+# Source configuration for the AI News Editor Agent.
+#
+# This file is committed. It must never contain secrets.
+#
+# Every endpoint below was fetched and verified on 2026-08-10: each returns a parseable
+# RSS 2.0 document over HTTPS with no authentication.
+#
+# `adapter` selects the implementation. Only `rss` exists today; `html_changelog`,
+# `hn_signal` and API-backed kinds arrive in later phases and will use `options` for
+# their own settings rather than being bent into an RSS shape.
+#
+# `trust_tier` is provenance metadata, not a truth signal. It records where a claim
+# came from; the editorial layer decides what that is worth.
+
+version: 1
+
+defaults:
+  timeout_seconds: 20
+  # Several of these feeds carry a full archive (the OpenAI feed is over a thousand
+  # entries). Feeds are newest-first, so a cap keeps recent items without re-ingesting
+  # years of history on every run.
+  max_items_per_fetch: 50
+  poll_interval_minutes: 60
+
+sources:
+  - id: openai_news
+    name: OpenAI News
+    enabled: true
+    adapter: rss
+    url: https://openai.com/news/rss.xml
+    trust_tier: OFFICIAL
+    publisher: OpenAI
+    editorial_role: >-
+      Product announcements and ChatGPT features straight from the vendor. The primary
+      source for "something you can use today" stories.
+    tags: [product_update, chatgpt, official]
+
+  - id: google_ai_blog
+    name: Google — The Keyword (AI)
+    enabled: true
+    adapter: rss
+    url: https://blog.google/technology/ai/rss/
+    trust_tier: OFFICIAL
+    publisher: Google
+    editorial_role: >-
+      Gemini features and consumer-facing Google AI products, written for a general
+      audience rather than for engineers.
+    tags: [product_update, gemini, official]
+
+  - id: huggingface_blog
+    name: Hugging Face Blog
+    enabled: true
+    adapter: rss
+    url: https://huggingface.co/blog/feed.xml
+    trust_tier: OFFICIAL
+    publisher: Hugging Face
+    editorial_role: >-
+      Notable open-source AI developments and tools. Skews technical; Phase 4 is
+      expected to filter this source hard and keep only stories with a consumer angle.
+    tags: [open_source, tools, technical]
+
+  - id: microsoft_365_blog
+    name: Microsoft 365 Blog
+    enabled: true
+    adapter: rss
+    url: https://www.microsoft.com/en-us/microsoft-365/blog/feed/
+    trust_tier: OFFICIAL
+    publisher: Microsoft
+    editorial_role: >-
+      User-facing Microsoft 365 Copilot features — AI at work, in tools people already
+      have. Publishes infrequently, so expect few items per run.
+    tags: [product_update, copilot, ai_for_work, official]
+
+  - id: techcrunch_ai
+    name: TechCrunch — AI
+    enabled: true
+    adapter: rss
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: TechCrunch
+    editorial_role: >-
+      Broader AI industry news plus the stories vendors never publish about themselves:
+      controversies, failures, deepfakes, scams and viral oddities. The main supply of
+      non-announcement material.
+    tags: [industry, consumer, controversy, viral]

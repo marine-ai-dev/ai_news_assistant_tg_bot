@@ -14,21 +14,25 @@ from __future__ import annotations
 import logging
 import socket
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 
 from ai_news_editor.domain.enums import AudienceTier, Category, SourceKind, TrustTier
 from ai_news_editor.domain.models import Article, RawItem, Source
 from ai_news_editor.settings import Settings
+from ai_news_editor.sources.base import FetchContext
+from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.storage import db
 from ai_news_editor.storage.repositories import (
     ArticleRepository,
     DraftRepository,
     RawItemRepository,
     ReviewDecisionRepository,
+    SourceFetchStateRepository,
     SourceRepository,
 )
 
@@ -167,6 +171,63 @@ def seeded_article(
     source = sources.upsert(make_source())
     item = raw_items.add(make_raw_item(source.id))
     return articles.add(make_article(item.id, source.id))
+
+
+# --- HTTP test doubles -----------------------------------------------------
+
+FIXTURE_FEEDS = Path(__file__).parent / "fixtures" / "feeds"
+
+
+def feed_bytes(name: str) -> bytes:
+    """Read a recorded feed fixture."""
+    return (FIXTURE_FEEDS / name).read_bytes()
+
+
+def mock_transport(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> httpx.MockTransport:
+    """Wrap a request handler as an httpx transport."""
+    return httpx.MockTransport(handler)
+
+
+def static_transport(
+    body: bytes,
+    *,
+    status_code: int = 200,
+    headers: dict[str, str] | None = None,
+    content_type: str = "application/rss+xml",
+) -> httpx.MockTransport:
+    """A transport that always answers with the same response."""
+    response_headers = {"content-type": content_type, **(headers or {})}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, content=body, headers=response_headers)
+
+    return httpx.MockTransport(handler)
+
+
+def make_http_client(transport: httpx.MockTransport, **overrides: object) -> HttpClient:
+    """An HttpClient wired to a mock transport, with retry sleeps disabled."""
+    kwargs: dict[str, object] = {"retry_backoff_seconds": 0.0, "transport": transport}
+    kwargs.update(overrides)
+    return HttpClient(**kwargs)  # type: ignore[arg-type]
+
+
+def rss_source(source_id: str = "test_source", **overrides: object) -> Source:
+    """A source pointing at a fake feed host."""
+    data: dict[str, object] = {"kind": SourceKind.RSS, "url": "https://feed.invalid/rss.xml"}
+    data.update(overrides)
+    return make_source(source_id, **data)
+
+
+@pytest.fixture
+def fetch_context() -> FetchContext:
+    return FetchContext(run_id="testrun", max_items=50)
+
+
+@pytest.fixture
+def fetch_states(connection: sqlite3.Connection) -> SourceFetchStateRepository:
+    return SourceFetchStateRepository(connection)
 
 
 DRAFT_CONTENT: dict[str, object] = {

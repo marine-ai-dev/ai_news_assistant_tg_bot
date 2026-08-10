@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Example AI News</title>
+    <link>https://example.invalid/</link>
+    <description>Synthetic feed used only for tests.</description>
+    <item>
+      <title>Chatbot adds a button &amp; a &lt;new&gt; panel</title>
+      <link>https://example.invalid/posts/one</link>
+      <guid isPermaLink="false">example-guid-0001</guid>
+      <author>editor@example.invalid (A. Editor)</author>
+      <pubDate>Mon, 03 Aug 2026 10:30:00 +0000</pubDate>
+      <description>A summary with an &amp;amp; entity and an em dash — here.</description>
+      <content:encoded><![CDATA[<p>Full body supplied by the feed.</p>]]></content:encoded>
+    </item>
+    <item>
+      <title>Українська новина про штучний інтелект</title>
+      <link>https://example.invalid/posts/two</link>
+      <guid isPermaLink="false">example-guid-0002</guid>
+      <pubDate>Tue, 04 Aug 2026 08:00:00 +0300</pubDate>
+      <description>Опис українською мовою з емодзі 🤖.</description>
+    </item>
+    <item>
+      <title>Entry that repeats the first guid</title>
+      <link>https://example.invalid/posts/one-again</link>
+      <guid isPermaLink="false">example-guid-0001</guid>
+      <pubDate>Wed, 05 Aug 2026 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

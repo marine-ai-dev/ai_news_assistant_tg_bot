@@ -5,15 +5,21 @@ from __future__ import annotations
 import contextlib
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
 from ai_news_editor.cli.main import app
 from ai_news_editor.health import HealthCheck, all_ok, run_health_checks
 from ai_news_editor.settings import Settings, get_settings
+from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.storage import db
+from tests.conftest import feed_bytes
 
 runner = CliRunner()
+
+#: The real configuration shipped in the repository.
+REPO_CONFIG = Path(__file__).resolve().parents[2] / "config" / "sources.yaml"
 
 
 def output_of(result: object) -> str:
@@ -44,13 +50,13 @@ class TestHelp:
     def test_root_help_lists_the_real_commands(self) -> None:
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        for command in ("version", "doctor", "db"):
+        for command in ("version", "doctor", "db", "collect", "sources"):
             assert command in output_of(result)
 
     def test_no_arguments_shows_help(self) -> None:
         assert runner.invoke(app, []).exit_code != 0
 
-    @pytest.mark.parametrize("command", ["collect", "review", "publish", "evaluate", "draft"])
+    @pytest.mark.parametrize("command", ["review", "publish", "evaluate", "draft"])
     def test_future_commands_are_absent_rather_than_hollow(self, command: str) -> None:
         """A command that exists but does nothing is worse than one that does not exist."""
         assert runner.invoke(app, [command]).exit_code != 0
@@ -173,3 +179,146 @@ class TestHealthChecks:
 
         checks = {c.name: c for c in run_health_checks(settings)}
         assert checks["Database connectivity"].ok is False
+
+
+class TestCollectCommand:
+    """The collect command, driven through mock transports."""
+
+    def _write_config(self, tmp_path: Path, url: str = "https://alpha.invalid/rss.xml") -> Path:
+        path = tmp_path / "sources.yaml"
+        path.write_text(
+            "version: 1\n"
+            "sources:\n"
+            "  - id: alpha\n"
+            "    name: Alpha Feed\n"
+            "    adapter: rss\n"
+            f"    url: {url}\n"
+            "    trust_tier: OFFICIAL\n"
+            "    editorial_role: Test source for the CLI.\n",
+            encoding="utf-8",
+        )
+        return path
+
+    @pytest.fixture
+    def wired(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+        """Point the CLI at a temp config and swap its HTTP client for a mock."""
+        self._write_config(tmp_path)
+        monkeypatch.setenv("AI_NEWS_SOURCES_CONFIG_PATH", str(tmp_path / "sources.yaml"))
+        get_settings.cache_clear()
+
+        state: dict[str, object] = {"response": None}
+
+        def fake_client(**kwargs: object) -> HttpClient:
+            def handler(request: httpx.Request) -> httpx.Response:
+                answer = state["response"]
+                if isinstance(answer, Exception):
+                    raise answer
+                return httpx.Response(
+                    answer.status_code, content=answer.content, headers=dict(answer.headers)  # type: ignore[union-attr]
+                )
+
+            return HttpClient(retry_backoff_seconds=0.0, transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr("ai_news_editor.cli.main.HttpClient", fake_client)
+        return state
+
+    def _feed(self) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=feed_bytes("rss_full.xml"),
+            headers={"content-type": "application/rss+xml"},
+        )
+
+    def test_collects_and_reports(self, wired) -> None:  # type: ignore[no-untyped-def]
+        runner.invoke(app, ["db", "init"])
+        wired["response"] = self._feed()
+
+        result = runner.invoke(app, ["collect"])
+        assert result.exit_code == 0
+        output = output_of(result)
+        assert "COLLECTION" in output
+        assert "alpha" in output
+
+    def test_second_run_reports_nothing_new(self, wired) -> None:  # type: ignore[no-untyped-def]
+        runner.invoke(app, ["db", "init"])
+        wired["response"] = self._feed()
+        runner.invoke(app, ["collect"])
+
+        result = runner.invoke(app, ["collect"])
+        assert result.exit_code == 0
+        assert "already known" in output_of(result)
+
+    def test_failure_exits_with_code_1(self, wired) -> None:  # type: ignore[no-untyped-def]
+        runner.invoke(app, ["db", "init"])
+        wired["response"] = httpx.Response(500)
+
+        result = runner.invoke(app, ["collect"])
+        assert result.exit_code == 1
+        assert "ERROR" in output_of(result)
+
+    def test_dry_run_writes_nothing(self, wired, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+        runner.invoke(app, ["db", "init"])
+        wired["response"] = self._feed()
+
+        result = runner.invoke(app, ["collect", "--dry-run"])
+        assert result.exit_code == 0
+        assert "dry run" in output_of(result)
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            assert connection.execute("SELECT COUNT(*) AS n FROM raw_items").fetchone()["n"] == 0
+        finally:
+            connection.close()
+
+    def test_unknown_source_exits_with_code_2(self, wired) -> None:  # type: ignore[no-untyped-def]
+        runner.invoke(app, ["db", "init"])
+        wired["response"] = self._feed()
+
+        result = runner.invoke(app, ["collect", "--source", "ghost"])
+        assert result.exit_code == 2
+        assert "unknown source id" in output_of(result)
+
+    def test_requires_a_database(self, wired) -> None:  # type: ignore[no-untyped-def]
+        wired["response"] = self._feed()
+        result = runner.invoke(app, ["collect"])
+        assert result.exit_code == 2
+        assert "db init" in output_of(result)
+
+    def test_refuses_to_run_against_a_stale_schema(self, wired, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+        """Collecting into a half-migrated database would fail confusingly later."""
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        connection.execute(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, "
+            "checksum TEXT NOT NULL, applied_at TEXT NOT NULL)"
+        )
+        connection.close()
+
+        wired["response"] = self._feed()
+        result = runner.invoke(app, ["collect"])
+        assert result.exit_code == 2
+        assert "db migrate" in output_of(result)
+
+
+class TestSourcesCommand:
+    """Runs against the real config/sources.yaml that ships with the project."""
+
+    @pytest.fixture(autouse=True)
+    def _shipped_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # The CLI fixture chdirs into a temp directory, so the relative default path
+        # no longer resolves; point at the repository copy explicitly.
+        monkeypatch.setenv("AI_NEWS_SOURCES_CONFIG_PATH", str(REPO_CONFIG))
+        get_settings.cache_clear()
+
+    def test_lists_the_configured_sources(self) -> None:
+        result = runner.invoke(app, ["sources"])
+        assert result.exit_code == 0
+        assert "openai_news" in output_of(result)
+
+    def test_shows_the_editorial_role(self) -> None:
+        assert "ChatGPT" in output_of(runner.invoke(app, ["sources"]))
+
+    def test_lists_every_configured_source(self) -> None:
+        output = output_of(runner.invoke(app, ["sources"]))
+        for source_id in ("openai_news", "google_ai_blog", "huggingface_blog",
+                          "microsoft_365_blog", "techcrunch_ai"):
+            assert source_id in output

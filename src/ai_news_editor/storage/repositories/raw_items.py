@@ -50,6 +50,49 @@ class RawItemRepository:
         )
         return item
 
+    def add_if_absent(self, item: RawItem) -> bool:
+        """Insert unless this source already delivered that entry. Returns whether it was new.
+
+        Ingestion-level idempotency only: identity is ``(source_id, external_id)``,
+        enforced by a unique index, so re-reading the same feed cannot accumulate
+        duplicates. This says nothing about two *different* sources covering the same
+        story — that is editorial deduplication, and it belongs to a later phase.
+
+        ``INSERT ... ON CONFLICT DO NOTHING`` rather than check-then-insert: one
+        statement, so there is no window between the check and the write. The conflict
+        target repeats the index's ``WHERE`` clause because the index is partial —
+        SQLite will not match a partial index otherwise.
+
+        An item with no ``external_id`` is always inserted, since there is nothing to
+        deduplicate on. Adapters are expected to supply one, deriving it deterministically
+        when the source does not.
+        """
+        cursor = self._conn.execute(
+            """
+            INSERT INTO raw_items (id, source_id, external_id, title_original, url_original,
+                                   author, published_at, fetched_at, summary_raw, content_raw,
+                                   payload_raw, content_type, fetch_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (source_id, external_id) WHERE external_id IS NOT NULL DO NOTHING
+            """,
+            (
+                str(item.id),
+                item.source_id,
+                item.external_id,
+                item.title_original,
+                item.url_original,
+                item.author,
+                to_iso(item.published_at) if item.published_at else None,
+                to_iso(item.fetched_at),
+                item.summary_raw,
+                item.content_raw,
+                item.payload_raw,
+                item.content_type,
+                item.fetch_run_id,
+            ),
+        )
+        return cursor.rowcount == 1
+
     def get(self, item_id: UUID) -> RawItem:
         row = self._conn.execute(
             "SELECT * FROM raw_items WHERE id = ?", (str(item_id),)

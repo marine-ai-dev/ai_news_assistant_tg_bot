@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Partly Usable Feed</title>
+    <link>https://partial.invalid/</link>
+    <description>One entry cannot be used; the other can.</description>
+    <item>
+      <title>This entry has no link at all</title>
+      <guid isPermaLink="false">no-link-entry</guid>
+    </item>
+    <item>
+      <title>This entry is fine</title>
+      <link>https://partial.invalid/usable</link>
+      <guid isPermaLink="false">usable-entry</guid>
+    </item>
+  </channel>
+</rss>

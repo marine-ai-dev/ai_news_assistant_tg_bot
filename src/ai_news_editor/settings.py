@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         default=None,
         description="SQLite file path. Defaults to <data_dir>/ai_news.sqlite3.",
     )
+    sources_config_path: Path = Field(
+        default=Path("config/sources.yaml"),
+        description="Human-editable source configuration. Committed; contains no secrets.",
+    )
     log_level: LogLevel = "INFO"
     log_format: LogFormat = "console"
 
@@ -54,7 +58,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    @field_validator("data_dir", "database_path")
+    @field_validator("data_dir", "database_path", "sources_config_path")
     @classmethod
     def _expand(cls, value: Path | None) -> Path | None:
         return value.expanduser() if value is not None else None

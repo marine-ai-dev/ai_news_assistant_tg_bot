@@ -173,3 +173,73 @@ class TestPragmas:
     def test_rows_are_addressable_by_column_name(self, connection: sqlite3.Connection) -> None:
         row = connection.execute("SELECT 1 AS answer").fetchone()
         assert row["answer"] == 1
+
+
+class TestMigration002:
+    """Phase-2 additions apply cleanly on a fresh database and on an existing one."""
+
+    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+        conn = db.connect(tmp_path / "fresh2.sqlite3")
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [1, 2]
+        assert "source_fetch_state" in _tables(conn)
+
+    def test_upgrade_from_a_phase_1_database(self, tmp_path: Path) -> None:
+        """A database that only ever saw 001 must upgrade without losing data."""
+        path = tmp_path / "upgrade.sqlite3"
+        migrations = db.MIGRATIONS_DIR
+        only_001 = tmp_path / "only_001"
+        only_001.mkdir()
+        (only_001 / "001_initial.sql").write_text(
+            (migrations / "001_initial.sql").read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+        conn = db.connect(path)
+        db.migrate(conn, only_001)
+        assert db.schema_version(conn) == 1
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+            "VALUES ('legacy', 'Legacy', 'RSS', 'https://legacy.invalid', 'OFFICIAL', "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [2]
+        assert db.schema_version(conn) == 2
+        assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
+
+    def test_new_source_columns_have_workable_defaults(self, tmp_path: Path) -> None:
+        conn = db.connect(tmp_path / "defaults.sqlite3")
+        db.migrate(conn)
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+            "VALUES ('s', 'S', 'RSS', 'https://s.invalid', 'OFFICIAL', 'now', 'now')"
+        )
+        row = conn.execute("SELECT editorial_role, tags_json FROM sources").fetchone()
+        assert row["editorial_role"] is None
+        assert row["tags_json"] == "[]"
+
+    def test_fetch_state_requires_a_real_source(self, connection: sqlite3.Connection) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO source_fetch_state (source_id, updated_at) VALUES ('ghost', 'now')"
+            )
+
+    def test_fetch_state_rejects_an_unknown_outcome(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        connection.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+            "VALUES ('s', 'S', 'RSS', 'https://s.invalid', 'OFFICIAL', 'now', 'now')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO source_fetch_state (source_id, last_outcome, updated_at) "
+                "VALUES ('s', 'MAYBE', 'now')"
+            )
+
+    def test_migration_001_was_not_altered(self) -> None:
+        """History must stay immutable; 002 is additive only."""
+        text = (db.MIGRATIONS_DIR / "001_initial.sql").read_text(encoding="utf-8")
+        assert "source_fetch_state" not in text
+        assert "editorial_role" not in text

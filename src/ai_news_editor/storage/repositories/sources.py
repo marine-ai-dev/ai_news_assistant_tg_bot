@@ -13,6 +13,7 @@ from ai_news_editor.domain.models import Source
 def _to_domain(row: sqlite3.Row) -> Source:
     data = dict(row)
     data["config"] = json.loads(data.pop("config_json"))
+    data["tags"] = tuple(json.loads(data.pop("tags_json")))
     return Source.model_validate(data)
 
 
@@ -32,9 +33,9 @@ class SourceRepository:
         self._conn.execute(
             """
             INSERT INTO sources (id, name, kind, url, trust_tier, signal_only, enabled,
-                                 language, publisher, poll_interval_minutes, config_json,
-                                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 language, publisher, poll_interval_minutes, editorial_role,
+                                 tags_json, config_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 name = excluded.name,
                 kind = excluded.kind,
@@ -45,6 +46,8 @@ class SourceRepository:
                 language = excluded.language,
                 publisher = excluded.publisher,
                 poll_interval_minutes = excluded.poll_interval_minutes,
+                editorial_role = excluded.editorial_role,
+                tags_json = excluded.tags_json,
                 config_json = excluded.config_json,
                 updated_at = excluded.updated_at
             """,
@@ -59,6 +62,8 @@ class SourceRepository:
                 updated.language,
                 updated.publisher,
                 updated.poll_interval_minutes,
+                updated.editorial_role,
+                json.dumps(list(updated.tags), ensure_ascii=False),
                 json.dumps(updated.config, ensure_ascii=False, sort_keys=True),
                 to_iso(updated.created_at),
                 to_iso(updated.updated_at),

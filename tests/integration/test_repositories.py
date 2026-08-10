@@ -7,7 +7,13 @@ from uuid import uuid4
 
 import pytest
 
-from ai_news_editor.domain.enums import ArticleStatus, AudienceTier, Category, DraftStatus
+from ai_news_editor.domain.enums import (
+    ArticleStatus,
+    AudienceTier,
+    Category,
+    DraftStatus,
+    FetchOutcome,
+)
 from ai_news_editor.domain.errors import (
     EntityNotFoundError,
     IllegalStateTransition,
@@ -19,6 +25,7 @@ from ai_news_editor.storage.repositories import (
     DraftRepository,
     RawItemRepository,
     ReviewDecisionRepository,
+    SourceFetchStateRepository,
     SourceRepository,
 )
 from tests.conftest import DRAFT_CONTENT, make_article, make_raw_item, make_source
@@ -539,3 +546,138 @@ class TestDomainTypesNotRawRows:
         assert isinstance(version.category, Category)
         assert isinstance(version.audience, AudienceTier)
         assert isinstance(drafts.get(draft.id).status, DraftStatus)
+
+
+class TestSourceFetchStateRepository:
+    @pytest.fixture(autouse=True)
+    def _source(self, sources: SourceRepository) -> None:
+        sources.upsert(make_source())
+
+    def test_unknown_source_returns_a_blank_state(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        """A never-fetched source has no state, which is not an error."""
+        state = fetch_states.get("test_source")
+        assert state.source_id == "test_source"
+        assert state.etag is None
+        assert state.last_success_at is None
+        assert state.consecutive_failures == 0
+
+    def test_find_distinguishes_absent_from_blank(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        assert fetch_states.find("test_source") is None
+
+    def test_success_stores_validators(self, fetch_states: SourceFetchStateRepository) -> None:
+        fetch_states.record_success(
+            "test_source",
+            outcome=FetchOutcome.OK,
+            etag='W/"v1"',
+            last_modified="Mon, 03 Aug 2026 10:30:00 GMT",
+            http_status=200,
+        )
+        state = fetch_states.get("test_source")
+        assert state.etag == 'W/"v1"'
+        assert state.last_modified == "Mon, 03 Aug 2026 10:30:00 GMT"
+        assert state.last_outcome is FetchOutcome.OK
+        assert state.last_success_at is not None
+        assert state.last_success_at.tzinfo is not None
+
+    def test_not_modified_counts_as_success(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        fetch_states.record_success(
+            "test_source",
+            outcome=FetchOutcome.NOT_MODIFIED,
+            etag=None,
+            last_modified=None,
+            http_status=304,
+        )
+        state = fetch_states.get("test_source")
+        assert state.last_outcome is FetchOutcome.NOT_MODIFIED
+        assert state.last_success_at is not None
+        assert state.consecutive_failures == 0
+
+    def test_failures_accumulate(self, fetch_states: SourceFetchStateRepository) -> None:
+        for _ in range(3):
+            fetch_states.record_failure("test_source", error="boom", http_status=500)
+        state = fetch_states.get("test_source")
+        assert state.consecutive_failures == 3
+        assert state.last_error == "boom"
+        assert state.last_http_status == 500
+
+    def test_success_resets_the_failure_count(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        fetch_states.record_failure("test_source", error="boom")
+        fetch_states.record_success(
+            "test_source", outcome=FetchOutcome.OK, etag=None, last_modified=None, http_status=200
+        )
+        state = fetch_states.get("test_source")
+        assert state.consecutive_failures == 0
+        assert state.last_error is None
+
+    def test_a_long_error_is_truncated(self, fetch_states: SourceFetchStateRepository) -> None:
+        fetch_states.record_failure("test_source", error="x" * 10_000)
+        assert len(fetch_states.get("test_source").last_error or "") <= 2000
+
+    def test_state_requires_an_existing_source(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            fetch_states.record_failure("ghost_source", error="boom")
+
+    def test_list_all_returns_domain_objects(
+        self, fetch_states: SourceFetchStateRepository
+    ) -> None:
+        fetch_states.record_failure("test_source", error="boom")
+        states = fetch_states.list_all()
+        assert len(states) == 1
+        assert states[0].last_outcome is FetchOutcome.ERROR
+
+
+class TestRawItemIdempotency:
+    def test_add_if_absent_reports_new_then_existing(
+        self, sources: SourceRepository, raw_items: RawItemRepository
+    ) -> None:
+        sources.upsert(make_source())
+        item = make_raw_item(external_id="stable-1")
+        assert raw_items.add_if_absent(item) is True
+        assert raw_items.add_if_absent(make_raw_item(external_id="stable-1")) is False
+        assert raw_items.count() == 1
+
+    def test_different_external_ids_both_insert(
+        self, sources: SourceRepository, raw_items: RawItemRepository
+    ) -> None:
+        sources.upsert(make_source())
+        assert raw_items.add_if_absent(make_raw_item(external_id="a"))
+        assert raw_items.add_if_absent(make_raw_item(external_id="b"))
+        assert raw_items.count() == 2
+
+    def test_the_same_external_id_across_sources_is_not_a_duplicate(
+        self, sources: SourceRepository, raw_items: RawItemRepository
+    ) -> None:
+        """Identity is per source; cross-source overlap is editorial dedup, not ingestion."""
+        sources.upsert(make_source("first"))
+        sources.upsert(make_source("second"))
+        assert raw_items.add_if_absent(make_raw_item("first", external_id="shared"))
+        assert raw_items.add_if_absent(make_raw_item("second", external_id="shared"))
+        assert raw_items.count() == 2
+
+    def test_an_item_without_an_external_id_is_always_inserted(
+        self, sources: SourceRepository, raw_items: RawItemRepository
+    ) -> None:
+        sources.upsert(make_source())
+        assert raw_items.add_if_absent(make_raw_item(external_id=None))
+        assert raw_items.add_if_absent(make_raw_item(external_id=None))
+        assert raw_items.count() == 2
+
+    def test_the_first_version_of_an_item_is_kept(
+        self, sources: SourceRepository, raw_items: RawItemRepository
+    ) -> None:
+        """Conflicts do nothing rather than overwrite: raw provenance is append-only."""
+        sources.upsert(make_source())
+        raw_items.add_if_absent(make_raw_item(external_id="x", title_original="Original"))
+        raw_items.add_if_absent(make_raw_item(external_id="x", title_original="Changed later"))
+        stored = raw_items.list_by_source("test_source")
+        assert [item.title_original for item in stored] == ["Original"]

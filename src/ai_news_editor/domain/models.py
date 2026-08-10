@@ -26,6 +26,7 @@ from ai_news_editor.domain.enums import (
     AudienceTier,
     Category,
     DraftStatus,
+    FetchOutcome,
     ReviewAction,
     SourceKind,
     TrustTier,
@@ -64,6 +65,11 @@ class Source(DomainModel):
     language: str = "en"
     publisher: str | None = None
     poll_interval_minutes: int = Field(default=60, ge=1)
+    editorial_role: str | None = Field(
+        default=None,
+        description="Why this source is in the mix and what stories it is expected to supply.",
+    )
+    tags: tuple[str, ...] = ()
     config: dict[str, object] = Field(default_factory=dict)
     created_at: UtcDatetime = Field(default_factory=now_utc)
     updated_at: UtcDatetime = Field(default_factory=now_utc)
@@ -168,6 +174,25 @@ class Draft(DomainModel):
     status: DraftStatus = DraftStatus.DRAFTED
     current_version_id: UUID | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
+    updated_at: UtcDatetime = Field(default_factory=now_utc)
+
+
+class SourceFetchState(DomainModel):
+    """HTTP caching validators and the outcome of the last fetch attempt.
+
+    Kept separate from :class:`Source` because it is operational bookkeeping that
+    changes on every run, while a source's definition comes from configuration.
+    """
+
+    source_id: NonEmptyStr
+    etag: str | None = None
+    last_modified: str | None = None
+    last_attempt_at: UtcDatetime | None = None
+    last_success_at: UtcDatetime | None = None
+    last_outcome: FetchOutcome | None = None
+    last_http_status: int | None = None
+    last_error: str | None = None
+    consecutive_failures: int = Field(default=0, ge=0)
     updated_at: UtcDatetime = Field(default_factory=now_utc)
 
 

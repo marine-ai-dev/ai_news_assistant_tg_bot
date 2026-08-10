@@ -1240,7 +1240,44 @@ The Phase 1 keys and relationships were checked against these additions: a
 ordering column, all attach to the existing stable `Draft.id` without touching the
 Article or Draft models.
 
-### 26.6 One deliberate omission
+### 26.6 Phase 2 notes (ingestion)
+
+**Source verification.** All five preferred sources were fetched and confirmed on
+2026-08-10 before being configured; none had to be substituted. The Microsoft 365 feed
+initially looked like an HTML page because it answers with an interstitial redirect —
+the final response is valid RSS 2.0.
+
+**Conditional GET is an optimisation, never a correctness mechanism.** Of the five
+configured feeds, only three (Hugging Face, Microsoft 365, TechCrunch) send `ETag` or
+`Last-Modified`; OpenAI and Google send neither and return the full body every time.
+Idempotency therefore rests on `(source_id, external_id)` identity, with conditional GET
+saving bandwidth where servers support it. A live second run confirmed this: three
+sources answered 304, two returned full bodies, and zero duplicate items were stored.
+
+**Ingestion identity vs editorial deduplication.** `add_if_absent` uses
+`INSERT ... ON CONFLICT DO NOTHING` against a partial unique index. This is *ingestion
+idempotency only* — it says nothing about two different outlets covering one story,
+which is editorial deduplication and belongs to Phase 3.
+
+**`payload_raw` holds the parsed entry, not the raw XML slice.** feedparser does not
+expose per-entry source XML, so the payload is a faithful JSON record of every field it
+extracted. This preserves provenance without pretending to store bytes we never had.
+
+**HTTP is confined to one boundary.** `sources/http.py` is the only module that talks to
+the network, and a safety test enforces that no other module imports an HTTP client.
+The URL guard rejects non-HTTP schemes and literal private/loopback addresses (including
+the cloud metadata endpoint) but deliberately does not resolve DNS — `config/sources.yaml`
+is operator-controlled and trusted. That assumption is documented in the module.
+
+**A per-fetch item cap was added** (`max_items_per_fetch`, default 50). Two configured
+feeds carry their entire archive — OpenAI's is over a thousand entries — and re-reading
+all of it every run is neither useful nor polite.
+
+**Migration 002 also added two source columns** (`editorial_role`, `tags_json`) rather
+than hiding editorial metadata in the adapter `config` blob. Both are consumed now, by
+the `sources` command and by collection reporting.
+
+### 26.7 One deliberate omission
 
 `draft_versions.category` has no `CHECK` constraint, unlike `audience` and every status
 column. The category vocabulary is editorial and expected to change as the channel

@@ -504,19 +504,76 @@ class TestInvariant5NoShortcutExists:
 
 
 class TestNoIntegrationsExist:
-    """Phase 1 has no outbound integrations; nothing can reach Telegram by accident."""
+    """Phase 2 adds outbound HTTP for reading feeds. Nothing else may reach the network.
 
-    def test_package_contains_no_publisher_or_network_client(self) -> None:
+    Phase 1 could simply forbid every HTTP client. Now that ingestion is real, the
+    invariant is narrower but just as important: HTTP stays inside the sources layer,
+    and neither Telegram nor an LLM provider exists anywhere.
+    """
+
+    def _sources(self) -> list[tuple[str, str]]:
         from pathlib import Path
 
         import ai_news_editor
 
         package_root = Path(ai_news_editor.__file__).parent
-        forbidden = ("import httpx", "import requests", "urllib.request", "api.telegram.org")
-        offenders = [
-            (path.relative_to(package_root).as_posix(), token)
+        return [
+            (path.relative_to(package_root).as_posix(), path.read_text())
             for path in package_root.rglob("*.py")
+        ]
+
+    def test_no_telegram_integration_exists(self) -> None:
+        forbidden = ("api.telegram.org", "import telegram", "telebot", "aiogram", "TELEGRAM_BOT")
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
             for token in forbidden
-            if token in path.read_text()
+            if token in text
         ]
         assert offenders == []
+
+    def test_no_llm_integration_exists(self) -> None:
+        forbidden = (
+            "import anthropic",
+            "import openai",
+            "from anthropic",
+            "from openai",
+            "api.anthropic.com",
+            "api.openai.com",
+            "langchain",
+        )
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
+            for token in forbidden
+            if token in text
+        ]
+        assert offenders == []
+
+    def test_no_html_scraping_library_exists(self) -> None:
+        """HTML changelog scraping belongs to a later phase."""
+        forbidden = ("bs4", "BeautifulSoup", "selectolax", "playwright", "selenium", "lxml.html")
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
+            for token in forbidden
+            if token in text
+        ]
+        assert offenders == []
+
+    def test_http_access_is_confined_to_the_sources_layer(self) -> None:
+        """Only the source adapters may talk to the network, through one boundary."""
+        allowed = {"sources/http.py", "sources/rss.py", "sources/config.py", "cli/main.py"}
+        offenders = [
+            name
+            for name, text in self._sources()
+            if ("httpx" in text or "urllib.request" in text or "import requests" in text)
+            and name not in allowed
+        ]
+        assert offenders == []
+
+    def test_only_one_http_library_is_used(self) -> None:
+        offenders = [
+            name for name, text in self._sources() if "import requests" in text
+        ]
+        assert offenders == [], "httpx is the single HTTP library"
