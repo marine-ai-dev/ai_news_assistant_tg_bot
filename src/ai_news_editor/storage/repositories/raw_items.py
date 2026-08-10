@@ -1,0 +1,77 @@
+"""Persistence for raw collected items — append-only provenance."""
+
+from __future__ import annotations
+
+import sqlite3
+from uuid import UUID
+
+from ai_news_editor.domain.clock import to_iso
+from ai_news_editor.domain.errors import EntityNotFoundError
+from ai_news_editor.domain.models import RawItem
+
+
+def _to_domain(row: sqlite3.Row) -> RawItem:
+    return RawItem.model_validate(dict(row))
+
+
+class RawItemRepository:
+    """Reads and appends ``raw_items``.
+
+    There is deliberately no update or delete method: the table records what a source
+    actually returned, and the database enforces that with triggers.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._conn = connection
+
+    def add(self, item: RawItem) -> RawItem:
+        self._conn.execute(
+            """
+            INSERT INTO raw_items (id, source_id, external_id, title_original, url_original,
+                                   author, published_at, fetched_at, summary_raw, content_raw,
+                                   payload_raw, content_type, fetch_run_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(item.id),
+                item.source_id,
+                item.external_id,
+                item.title_original,
+                item.url_original,
+                item.author,
+                to_iso(item.published_at) if item.published_at else None,
+                to_iso(item.fetched_at),
+                item.summary_raw,
+                item.content_raw,
+                item.payload_raw,
+                item.content_type,
+                item.fetch_run_id,
+            ),
+        )
+        return item
+
+    def get(self, item_id: UUID) -> RawItem:
+        row = self._conn.execute(
+            "SELECT * FROM raw_items WHERE id = ?", (str(item_id),)
+        ).fetchone()
+        if row is None:
+            raise EntityNotFoundError(f"raw item {item_id} not found")
+        return _to_domain(row)
+
+    def exists_external_id(self, source_id: str, external_id: str) -> bool:
+        """Whether this source already delivered an item with that stable id."""
+        row = self._conn.execute(
+            "SELECT 1 FROM raw_items WHERE source_id = ? AND external_id = ? LIMIT 1",
+            (source_id, external_id),
+        ).fetchone()
+        return row is not None
+
+    def list_by_source(self, source_id: str, *, limit: int = 100) -> list[RawItem]:
+        rows = self._conn.execute(
+            "SELECT * FROM raw_items WHERE source_id = ? ORDER BY fetched_at DESC LIMIT ?",
+            (source_id, limit),
+        ).fetchall()
+        return [_to_domain(row) for row in rows]
+
+    def count(self) -> int:
+        return int(self._conn.execute("SELECT COUNT(*) AS n FROM raw_items").fetchone()["n"])
