@@ -30,6 +30,8 @@ build/
 # decisions they carry live in SQLite once imported.
 editorial_work/*
 !editorial_work/README.md
+writing_work/*
+!writing_work/README.md
 
 # --- Tooling caches ------------------------------------------------------
 .pytest_cache/

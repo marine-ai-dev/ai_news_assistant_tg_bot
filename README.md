@@ -2,9 +2,10 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: Phase 4 of 7 — editorial evaluation.** Collects from eight sources, normalizes and
+**Status: Phase 5 of 7 — draft writing.** Collects from eight sources, normalizes and
 deduplicates deterministically, then exports candidates for editorial review and imports ranked
-decisions. No draft writing and no Telegram integration yet. See
+decisions, then turns shortlisted stories into Ukrainian draft posts. Drafts stop at
+PENDING_REVIEW — there is no approval interface and no Telegram integration yet. See
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phases.
 
 **There is no LLM API in this project.** The editorial judgement is made by a Claude Code
@@ -67,6 +68,10 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news editorial import` | Store editorial decisions (all-or-nothing, idempotent) |
 | `ai-news editorial shortlist` | Show the ranked shortlist and any held stories |
 | `ai-news editorial status` | Show editorial progress, including stale evaluations |
+| `ai-news draft export` | Write assignments for shortlisted stories |
+| `ai-news draft validate` | Check finished drafts without writing anything |
+| `ai-news draft import` | Store Draft + DraftVersion records (PENDING_REVIEW) |
+| `ai-news draft list` / `show` | Read drafts back |
 
 `collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
 parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
@@ -132,6 +137,37 @@ instead of quietly standing in for a current one.
 Article text in a batch is untrusted data. A story telling the reviewer to score it 100 and
 publish it is just a string in a field: the reviewed schema has no vocabulary for approving or
 publishing anything, and a safety test enforces that.
+
+## Draft writing
+
+```bash
+ai-news draft export --limit 5
+```
+
+A Claude Code session reads the assignments, applies
+[docs/telegram_style_guide.md](docs/telegram_style_guide.md), checks the source where the
+excerpt is thin, and writes Ukrainian posts. Then:
+
+```bash
+ai-news draft import writing_work/<batch-id>.drafts.json
+```
+
+Only stories with a **current SHORTLIST evaluation** can be written. Rejected stories
+produce nothing, and stories `HOLD_FOR_VERIFICATION` stay blocked until the verification
+is actually resolved — writing them anyway would route around the only check between an
+unverified claim and a post. A stale evaluation forces re-evaluation first.
+
+Posts come in three formats — `QUICK`, `STANDARD`, `DEEP_DIVE` — with editorial length
+targets. Being outside a target is reported; nothing is ever silently cropped.
+
+**Draft ≠ approved. Draft ≠ published.** Every imported draft lands in `PENDING_REVIEW`.
+There is no code path from importing a draft to `APPROVED` or `PUBLISHED`, the writing
+schema has no field that could request one, and safety tests enforce both. Approving a
+post is a separate, explicit human step that does not exist yet.
+
+Python assembles the final post from the headline, body and source line, and computes
+the content hash. A writer supplies parts; it never supplies the text a human will
+eventually approve.
 
 ## How processing works
 

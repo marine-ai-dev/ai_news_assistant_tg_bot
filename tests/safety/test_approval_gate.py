@@ -682,7 +682,7 @@ class TestIngestionCannotReachPublishing:
             (path.relative_to(root).as_posix(), path.read_text()) for path in root.rglob("*.py")
         ]
 
-    @pytest.mark.parametrize("package", ["sources", "pipeline", "editorial"])
+    @pytest.mark.parametrize("package", ["sources", "pipeline", "editorial", "writing"])
     def test_layer_cannot_mint_an_authorization(self, package: str) -> None:
         offenders = [
             name
@@ -691,7 +691,7 @@ class TestIngestionCannotReachPublishing:
         ]
         assert offenders == []
 
-    @pytest.mark.parametrize("package", ["sources", "pipeline", "editorial"])
+    @pytest.mark.parametrize("package", ["sources", "pipeline", "editorial", "writing"])
     def test_layer_does_not_import_the_approval_gate(self, package: str) -> None:
         offenders = [
             name
@@ -702,10 +702,31 @@ class TestIngestionCannotReachPublishing:
 
     @pytest.mark.parametrize("package", ["sources", "pipeline", "editorial"])
     def test_layer_does_not_touch_drafts_or_review_decisions(self, package: str) -> None:
+        """The writing layer is excluded: creating drafts is exactly its job. It still
+        may not touch review decisions — see the next test."""
         offenders = [
             name
             for name, text in self._layer(package)
             if "DraftRepository" in text or "ReviewDecisionRepository" in text
+        ]
+        assert offenders == []
+
+    def test_the_writing_layer_never_records_a_review_decision(self) -> None:
+        """Writing creates drafts. Approving them is a human act it cannot perform."""
+        offenders = [
+            name
+            for name, text in self._layer("writing")
+            if "ReviewDecisionRepository" in text or "ReviewAction" in text
+        ]
+        assert offenders == []
+
+    def test_the_writing_layer_never_sets_a_terminal_or_approved_status(self) -> None:
+        forbidden = ("DraftStatus.APPROVED", "DraftStatus.PUBLISHED", "DraftStatus.PUBLISHING")
+        offenders = [
+            (name, token)
+            for name, text in self._layer("writing")
+            for token in forbidden
+            if token in text
         ]
         assert offenders == []
 

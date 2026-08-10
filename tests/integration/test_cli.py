@@ -637,3 +637,240 @@ class TestEditorialCommands:
     def test_no_publish_or_approve_command_exists(self) -> None:
         for command in ("publish", "approve", "send"):
             assert runner.invoke(app, ["editorial", command]).exit_code != 0
+
+
+class TestDraftCommands:
+    """The draft CLI group, end to end against a temporary database."""
+
+    def _seed_shortlist(self, tmp_path: Path, count: int = 2) -> None:
+        """A source, articles, and a SHORTLIST evaluation for each."""
+        from uuid import uuid4
+
+        from ai_news_editor.editorial.export import build_batch
+        from ai_news_editor.editorial.import_results import import_reviewed
+        from ai_news_editor.editorial.rubric import RUBRIC_VERSION, SCHEMA_VERSION
+        from ai_news_editor.editorial.schema import ReviewedBatch
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            connection.execute(
+                "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+                "VALUES ('alpha', 'Alpha Co', 'RSS', 'https://alpha.invalid/f', 'OFFICIAL', "
+                "'2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')"
+            )
+            for i in range(count):
+                raw_id, art_id = str(uuid4()), str(uuid4())
+                connection.execute(
+                    "INSERT INTO raw_items (id, source_id, external_id, title_original, "
+                    "url_original, payload_raw, content_type, fetched_at) "
+                    "VALUES (?, 'alpha', ?, ?, ?, '{}', 'application/rss+xml', "
+                    "'2026-08-01T00:00:00+00:00')",
+                    (raw_id, f"e{i}", f"Story {i}", f"https://alpha.invalid/{i}"),
+                )
+                connection.execute(
+                    "INSERT INTO articles (id, raw_item_id, source_id, title, canonical_url, "
+                    "clean_text, published_at, status, created_at, updated_at) "
+                    "VALUES (?, ?, 'alpha', ?, ?, ?, '2026-08-01T00:00:00+00:00', 'NORMALIZED', "
+                    "'2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')",
+                    (
+                        art_id,
+                        raw_id,
+                        f"Alpha ships feature number {i}",
+                        f"https://alpha.invalid/{i}",
+                        f"Body number {i} describing what changed for users of the app.",
+                    ),
+                )
+
+            batch = build_batch(connection, limit=10)
+            reviewed = ReviewedBatch.model_validate(
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "rubric_version": RUBRIC_VERSION,
+                    "batch_id": batch.batch_id,
+                    "reviewer": "test",
+                    "reviews": [
+                        {
+                            "article_id": str(a.article_id),
+                            "content_fingerprint": a.content_fingerprint,
+                            "decision": "SHORTLIST",
+                            "category": "PRODUCT_UPDATE",
+                            "audience": "GENERAL",
+                            "scores": {
+                                "credibility": 92,
+                                "general_ai_relevance": 88,
+                                "reader_interest": 85,
+                                "usefulness": 80,
+                                "novelty": 70,
+                                "wow_factor": 60,
+                                "virality_potential": 65,
+                                "accessibility": 90,
+                                "consumer_impact": 82,
+                            },
+                            "verification_status": "NOT_REQUIRED",
+                            "why_selected": ["new user-facing capability"],
+                            "editorial_angle": "What changes for an ordinary user.",
+                        }
+                        for a in batch.articles
+                    ],
+                }
+            )
+            import_reviewed(connection, reviewed)
+        finally:
+            connection.close()
+
+    def _drafts_from(self, assignment_path: Path) -> dict:
+        import json as _json
+
+        batch = _json.loads(assignment_path.read_text(encoding="utf-8"))
+        return {
+            "schema_version": batch["schema_version"],
+            "style_version": batch["style_version"],
+            "batch_id": batch["batch_id"],
+            "writer": "test",
+            "drafts": [
+                {
+                    "article_id": a["article_id"],
+                    "evaluation_id": a["evaluation"]["evaluation_id"],
+                    "article_fingerprint": a["article_fingerprint"],
+                    "post_format": "STANDARD",
+                    "headline": "🆕 Застосунок отримав нову функцію",
+                    "body": (
+                        "Компанія оновила застосунок: тепер він уміє більше, ніж раніше. "
+                        "Це помітно тим, хто користується ним щодня — зникає зайвий крок. "
+                        "Функція вже доступна, компанія заявляє про поступовий запуск. "
+                        "Варто памʼятати: доступність у регіонах може відрізнятися."
+                    ),
+                    "source_label": "Alpha Co",
+                    "source_url": a["source"]["url"],
+                    "writer_notes": ["доступність не вказана"],
+                }
+                for a in batch["assignments"]
+            ],
+        }
+
+    def _latest_assignment(self, tmp_path: Path) -> Path:
+        return next((tmp_path / "writing_work").glob("write-*.json"))
+
+    def test_export_writes_assignments(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+
+        result = runner.invoke(app, ["draft", "export", "--limit", "2"])
+        assert result.exit_code == 0
+        assert "Writing batch" in output_of(result)
+        assert self._latest_assignment(tmp_path).exists()
+
+    def test_export_reports_nothing_when_no_shortlist(self) -> None:
+        runner.invoke(app, ["db", "init"])
+        result = runner.invoke(app, ["draft", "export"])
+        assert "Nothing eligible to write" in output_of(result)
+
+    def test_validate_accepts_good_drafts(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+        runner.invoke(app, ["draft", "export"])
+
+        path = tmp_path / "drafts.json"
+        path.write_text(
+            _json.dumps(self._drafts_from(self._latest_assignment(tmp_path)), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["draft", "validate", str(path)])
+        assert result.exit_code == 0
+        assert "Valid" in output_of(result)
+
+    def test_validate_rejects_bad_drafts(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+        runner.invoke(app, ["draft", "export"])
+
+        payload = self._drafts_from(self._latest_assignment(tmp_path))
+        payload["drafts"][0]["source_url"] = "javascript:alert(1)"
+        path = tmp_path / "bad.json"
+        path.write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        result = runner.invoke(app, ["draft", "validate", str(path)])
+        assert result.exit_code == 1
+        assert "rejected" in output_of(result).lower()
+
+    def test_import_creates_pending_review_drafts(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+        runner.invoke(app, ["draft", "export"])
+
+        path = tmp_path / "drafts.json"
+        path.write_text(
+            _json.dumps(self._drafts_from(self._latest_assignment(tmp_path)), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        result = runner.invoke(app, ["draft", "import", str(path)])
+        assert result.exit_code == 0
+        assert "PENDING_REVIEW" in output_of(result)
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            statuses = {
+                row["status"] for row in connection.execute("SELECT status FROM drafts").fetchall()
+            }
+            assert statuses == {"PENDING_REVIEW"}
+        finally:
+            connection.close()
+
+    def test_import_is_idempotent(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+        runner.invoke(app, ["draft", "export"])
+        path = tmp_path / "drafts.json"
+        path.write_text(
+            _json.dumps(self._drafts_from(self._latest_assignment(tmp_path)), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        runner.invoke(app, ["draft", "import", str(path)])
+        runner.invoke(app, ["draft", "import", str(path)])
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            assert connection.execute("SELECT COUNT(*) AS n FROM drafts").fetchone()["n"] == 2
+        finally:
+            connection.close()
+
+    def test_list_and_show(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed_shortlist(tmp_path)
+        runner.invoke(app, ["draft", "export"])
+        path = tmp_path / "drafts.json"
+        path.write_text(
+            _json.dumps(self._drafts_from(self._latest_assignment(tmp_path)), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        runner.invoke(app, ["draft", "import", str(path)])
+
+        listing = runner.invoke(app, ["draft", "list"])
+        assert listing.exit_code == 0
+        assert "PENDING_REVIEW" in output_of(listing)
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            draft_id = connection.execute("SELECT id FROM drafts LIMIT 1").fetchone()["id"]
+        finally:
+            connection.close()
+
+        shown = runner.invoke(app, ["draft", "show", draft_id[:8]])
+        assert shown.exit_code == 0
+        output = output_of(shown)
+        assert "Застосунок" in output
+        assert "not approved and not published" in output
+
+    def test_no_approve_or_publish_command_exists(self) -> None:
+        for command in ("approve", "publish", "reject", "send"):
+            assert runner.invoke(app, ["draft", command]).exit_code != 0

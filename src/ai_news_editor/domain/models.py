@@ -30,6 +30,7 @@ from ai_news_editor.domain.enums import (
     EditorialDecision,
     EvaluatorType,
     FetchOutcome,
+    PostFormat,
     PrefilterReason,
     ReviewAction,
     SourceKind,
@@ -222,6 +223,13 @@ class DraftVersion(ImmutableDomainModel):
     category: Category
     audience: AudienceTier
     source_attribution: NonEmptyStr
+    #: Machine-readable source link, kept alongside the rendered attribution line.
+    source_url: str | None = None
+    post_format: PostFormat | None = None
+    style_version: str | None = None
+    #: Internal reviewer notes. Never published, and deliberately outside the content
+    #: hash: a note must not change what a human is approving.
+    writer_notes: tuple[str, ...] = ()
     created_by: NonEmptyStr
     created_at: UtcDatetime = Field(default_factory=now_utc)
 
@@ -248,6 +256,9 @@ class Draft(DomainModel):
 
     id: UUID = Field(default_factory=uuid4)
     article_id: UUID
+    #: The editorial judgement that authorised writing. A draft always traces back to
+    #: the decision that said the story was worth covering.
+    evaluation_id: UUID | None = None
     status: DraftStatus = DraftStatus.DRAFTED
     current_version_id: UUID | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)

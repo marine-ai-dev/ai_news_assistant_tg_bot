@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from ai_news_editor.domain.clock import now_utc, to_iso
-from ai_news_editor.domain.enums import AudienceTier, Category, DraftStatus
+from ai_news_editor.domain.enums import AudienceTier, Category, DraftStatus, PostFormat
 from ai_news_editor.domain.errors import EntityNotFoundError, RepositoryError
 from ai_news_editor.domain.models import Draft, DraftVersion
 from ai_news_editor.domain.transitions import assert_draft_transition
@@ -46,6 +46,7 @@ def _draft_to_domain(row: sqlite3.Row) -> Draft:
 def _version_to_domain(row: sqlite3.Row) -> DraftVersion:
     data = dict(row)
     data["hashtags"] = tuple(json.loads(data.pop("hashtags_json")))
+    data["writer_notes"] = tuple(json.loads(data.pop("writer_notes_json")))
     # content_hash is computed from the content, never read back as an input field.
     data.pop("content_hash", None)
     return DraftVersion.model_validate(data)
@@ -70,9 +71,16 @@ class DraftRepository:
         source_attribution: str,
         created_by: str,
         hashtags: Sequence[str] = (),
+        evaluation_id: UUID | None = None,
+        source_url: str | None = None,
+        post_format: PostFormat | None = None,
+        style_version: str | None = None,
+        writer_notes: Sequence[str] = (),
     ) -> tuple[Draft, DraftVersion]:
         """Create a draft together with its first version, atomically."""
-        draft = Draft(article_id=article_id, status=DraftStatus.DRAFTED)
+        draft = Draft(
+            article_id=article_id, evaluation_id=evaluation_id, status=DraftStatus.DRAFTED
+        )
         version = DraftVersion(
             draft_id=draft.id,
             version_no=1,
@@ -82,16 +90,21 @@ class DraftRepository:
             category=category,
             audience=audience,
             source_attribution=source_attribution,
+            source_url=source_url,
+            post_format=post_format,
+            style_version=style_version,
+            writer_notes=tuple(writer_notes),
             created_by=created_by,
         )
 
         with transaction(self._conn) as conn:
             conn.execute(
-                "INSERT INTO drafts (id, article_id, status, current_version_id, "
-                "created_at, updated_at) VALUES (?, ?, ?, NULL, ?, ?)",
+                "INSERT INTO drafts (id, article_id, evaluation_id, status, "
+                "current_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?)",
                 (
                     str(draft.id),
                     str(draft.article_id),
+                    str(evaluation_id) if evaluation_id else None,
                     draft.status.value,
                     to_iso(draft.created_at),
                     to_iso(draft.updated_at),
@@ -116,6 +129,10 @@ class DraftRepository:
         source_attribution: str,
         created_by: str,
         hashtags: Sequence[str] = (),
+        source_url: str | None = None,
+        post_format: PostFormat | None = None,
+        style_version: str | None = None,
+        writer_notes: Sequence[str] = (),
     ) -> tuple[Draft, DraftVersion]:
         """Append a new immutable version and point the draft at it.
 
@@ -138,6 +155,10 @@ class DraftRepository:
             category=category,
             audience=audience,
             source_attribution=source_attribution,
+            source_url=source_url,
+            post_format=post_format,
+            style_version=style_version,
+            writer_notes=tuple(writer_notes),
             created_by=created_by,
         )
 
@@ -165,9 +186,10 @@ class DraftRepository:
         conn.execute(
             """
             INSERT INTO draft_versions (id, draft_id, version_no, title, body, hashtags_json,
-                                        category, audience, source_attribution, content_hash,
-                                        created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        category, audience, source_attribution, source_url,
+                                        post_format, style_version, writer_notes_json,
+                                        content_hash, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(version.id),
@@ -179,6 +201,10 @@ class DraftRepository:
                 version.category.value,
                 version.audience.value,
                 version.source_attribution,
+                version.source_url,
+                version.post_format.value if version.post_format else None,
+                version.style_version,
+                json.dumps(list(version.writer_notes), ensure_ascii=False),
                 version.content_hash,
                 version.created_by,
                 to_iso(version.created_at),
@@ -264,3 +290,22 @@ class DraftRepository:
             ),
         )
         return cursor.rowcount == 1
+
+    def find_by_article(self, article_id: UUID) -> Draft | None:
+        """The draft for an article, if one exists. One draft per article in Phase 5."""
+        row = self._conn.execute(
+            "SELECT * FROM drafts WHERE article_id = ? ORDER BY created_at LIMIT 1",
+            (str(article_id),),
+        ).fetchone()
+        return _draft_to_domain(row) if row else None
+
+    def article_ids_with_drafts(self) -> set[UUID]:
+        """Articles that already have a draft, so writing does not duplicate them."""
+        rows = self._conn.execute("SELECT DISTINCT article_id FROM drafts").fetchall()
+        return {UUID(row["article_id"]) for row in rows}
+
+    def list_all(self, *, limit: int = 100) -> list[Draft]:
+        rows = self._conn.execute(
+            "SELECT * FROM drafts ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return [_draft_to_domain(row) for row in rows]

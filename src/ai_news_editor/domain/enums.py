@@ -114,6 +114,20 @@ class PrefilterReason(StrEnum):
     LEGAL_OR_INVESTOR_NOTICE = "LEGAL_OR_INVESTOR_NOTICE"
 
 
+class PostFormat(StrEnum):
+    """How long a post should be.
+
+    Three formats rather than one length, because a one-line changelog entry and a
+    deepfake investigation are not the same story. Forcing both into the same shape
+    produces padding in one and compression in the other, and a channel where every
+    post looks identical stops being read.
+    """
+
+    QUICK = "QUICK"
+    STANDARD = "STANDARD"
+    DEEP_DIVE = "DEEP_DIVE"
+
+
 class EditorialDecision(StrEnum):
     """What the editorial layer decided about a candidate story.
 

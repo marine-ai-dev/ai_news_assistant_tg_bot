@@ -145,3 +145,43 @@ class TestConfigureLogging:
         filters = logging.getLogger().handlers[0].filters
         assert any(isinstance(f, RunIdFilter) for f in filters)
         assert any(isinstance(f, RedactionFilter) for f in filters)
+
+
+class TestReservedExtraKeys:
+    """``logger.info(..., extra={...})`` raises if a key shadows a LogRecord attribute.
+
+    The failure happens at call time, so a collision in a rarely-exercised code path
+    ships silently and then crashes in production. This scans for it instead.
+    """
+
+    RESERVED = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
+        "message",
+        "asctime",
+    }
+
+    def test_reserved_names_are_known(self) -> None:
+        for name in ("created", "message", "module", "name", "args", "levelname"):
+            assert name in self.RESERVED
+
+    def test_no_logging_call_uses_a_reserved_extra_key(self) -> None:
+        import re
+        from pathlib import Path
+
+        import ai_news_editor
+
+        package_root = Path(ai_news_editor.__file__).parent
+        pattern = re.compile(r"extra=\{(.*?)\}", re.DOTALL)
+        key_pattern = re.compile(r'"([a-z_]+)"\s*:')
+
+        offenders: list[tuple[str, str]] = []
+        for path in package_root.rglob("*.py"):
+            # Comments may legitimately mention a reserved name while explaining why it
+            # is avoided, so they are stripped before scanning.
+            code = "\n".join(
+                line for line in path.read_text().splitlines() if not line.strip().startswith("#")
+            )
+            for block in pattern.findall(code):
+                for key in key_pattern.findall(block):
+                    if key in self.RESERVED:
+                        offenders.append((path.name, key))
+        assert offenders == []

@@ -1370,7 +1370,44 @@ evaluations with identical components rank identically whoever produced them.
 philosophy: a judgement names the exact content it judged, so renormalizing an article
 makes its old evaluation visibly stale rather than silently current.
 
-### 26.9 One deliberate omission
+### 26.9 Phase 5 notes (draft writing)
+
+**Same exchange pattern as Phase 4, one stage later.** Assignments out, drafts back,
+strictly validated, `style_version` alongside `rubric_version`. The writing layer is a
+Claude Code session, not an LLM API — see §26.8.
+
+**Migration 005 was necessary.** The Draft/DraftVersion tables from migration 001 are
+not reshaped, but four things Phase 5 genuinely persists had nowhere to live: the
+evaluation that authorised the draft (provenance), the post format (drives length
+validation and preview), the machine-readable source URL (separate from the rendered
+attribution line), and internal writer notes. A fifth column records the style version.
+
+**Writer notes are deliberately outside the content hash.** `compute_content_hash` was
+left untouched: it covers title, body, hashtags, category, audience and the rendered
+source attribution — exactly what a reviewer reads. An internal note must not be able to
+change what a human is approving. The source URL is inside the hash by virtue of being
+part of the attribution line.
+
+**Python assembles the post.** The writer supplies a headline, body, source label and
+URL; `writing/format.py` renders the final text and Python computes the hash. Ranking
+was kept out of the evaluator's hands in Phase 4 for the same reason.
+
+**Length policy: targets warn, hard limits reject.** Being outside a format's editorial
+target is reported and stored, never corrected. Only a post under 120 or over 3500
+characters is refused, and it is refused rather than cropped — silently truncating
+someone's prose is how a post ships missing its caveat.
+
+**Eligibility lives in one function.** `writing/export.eligibility_problem` is consulted
+by the exporter *and* the importer, so a draft cannot be smuggled in for a rejected or
+held story by hand-writing the JSON. The importer passes `has_draft=False` deliberately:
+an already-drafted article is an idempotent skip, not an error.
+
+**A logging bug was found and fixed during this phase.** `extra={"created": ...}` shadows
+`LogRecord.created`, which Python's logging refuses to overwrite — it raises at call
+time, so the import command crashed only when actually run. The key was renamed and a
+test now scans the package for any reserved-name collision.
+
+### 26.10 One deliberate omission
 
 `draft_versions.category` has no `CHECK` constraint, unlike `audience` and every status
 column. The category vocabulary is editorial and expected to change as the channel

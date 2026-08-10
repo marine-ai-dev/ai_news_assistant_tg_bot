@@ -323,10 +323,10 @@ class TestMigration003:
 class TestMigration004:
     """Phase-4 evaluations apply cleanly on a fresh database and on a Phase-3 one."""
 
-    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+    def test_fresh_install_includes_the_evaluations_table(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh4.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2, 3, 4]
+        assert [m.version for m in applied][:4] == [1, 2, 3, 4]
         assert "evaluations" in _tables(conn)
 
     def test_upgrade_from_a_phase_3_database(self, tmp_path: Path) -> None:
@@ -351,7 +351,8 @@ class TestMigration004:
         )
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [4]
+        assert applied[0].version == 4
+        assert db.schema_version(conn) == len(db.discover_migrations())
         assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
 
     def test_evaluations_require_a_real_article(self, connection: sqlite3.Connection) -> None:
@@ -428,3 +429,68 @@ class TestMigration004:
             text = (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8").lower()
             assert "create table evaluations" not in text
             assert "alter table evaluations" not in text
+
+
+class TestMigration005:
+    """Phase-5 writing metadata applies cleanly and leaves Phase-1 guarantees intact."""
+
+    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+        conn = db.connect(tmp_path / "fresh5.sqlite3")
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [1, 2, 3, 4, 5]
+
+    def test_upgrade_from_a_phase_4_database(self, tmp_path: Path) -> None:
+        staged = tmp_path / "upto_004"
+        staged.mkdir()
+        for name in sorted(p.name for p in db.MIGRATIONS_DIR.glob("00[1-4]_*.sql")):
+            (staged / name).write_text(
+                (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        conn = db.connect(tmp_path / "upgrade5.sqlite3")
+        db.migrate(conn, staged)
+        assert db.schema_version(conn) == 4
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [5]
+
+    def test_new_draft_columns_exist(self, connection: sqlite3.Connection) -> None:
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(draft_versions)")}
+        assert {"post_format", "source_url", "writer_notes_json", "style_version"} <= columns
+        draft_columns = {row["name"] for row in connection.execute("PRAGMA table_info(drafts)")}
+        assert "evaluation_id" in draft_columns
+
+    def test_unknown_post_format_is_refused(
+        self, connection: sqlite3.Connection, seeded_article
+    ) -> None:
+        connection.execute(
+            "INSERT INTO drafts (id, article_id, status, created_at, updated_at) "
+            "VALUES ('d1', ?, 'DRAFTED', 'now', 'now')",
+            (str(seeded_article.id),),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO draft_versions (id, draft_id, version_no, title, body, category, "
+                "audience, source_attribution, post_format, content_hash, created_by, created_at) "
+                "VALUES ('v1', 'd1', 1, 't', 'b', 'WOW', 'GENERAL', 'a', 'EPIC_SAGA', 'h', "
+                "'test', 'now')"
+            )
+
+    def test_phase_one_immutability_triggers_survive(
+        self, connection: sqlite3.Connection, seeded_article
+    ) -> None:
+        """Migration 005 must not have weakened the append-only guarantees."""
+        triggers = {
+            row["name"]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'trigger'"
+            ).fetchall()
+        }
+        assert "trg_draft_versions_no_update" in triggers
+        assert "trg_draft_versions_no_delete" in triggers
+
+    def test_earlier_migrations_were_not_altered(self) -> None:
+        for path in sorted(db.MIGRATIONS_DIR.glob("00[1-4]_*.sql")):
+            text = path.read_text(encoding="utf-8").lower()
+            assert "post_format" not in text
+            assert "writer_notes_json" not in text
