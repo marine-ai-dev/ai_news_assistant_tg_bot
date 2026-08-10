@@ -262,3 +262,10 @@ class ArticleRepository:
             "SELECT status, COUNT(*) AS n FROM articles GROUP BY status ORDER BY status"
         ).fetchall()
         return {row["status"]: row["n"] for row in rows}
+
+    def list_by_status_ids(self, status: ArticleStatus = ArticleStatus.NORMALIZED) -> list[UUID]:
+        """Ids of articles in a status, for counting without loading bodies."""
+        rows = self._conn.execute(
+            "SELECT id FROM articles WHERE status = ?", (status.value,)
+        ).fetchall()
+        return [UUID(row["id"]) for row in rows]

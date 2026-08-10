@@ -614,6 +614,45 @@ class TestNoIntegrationsExist:
         ]
         assert offenders == []
 
+    def test_no_llm_provider_dependency_exists(self) -> None:
+        """The editorial layer is a Claude Code session, not an API integration.
+
+        No provider SDK, no local model, no API key. The replacement boundary is the
+        JSON schema in editorial/, so swapping in an automated evaluator later needs no
+        dependency here.
+        """
+        forbidden = (
+            "openai", "anthropic", "google-generativeai", "google.generativeai",
+            "google_genai", "ollama", "transformers", "import torch", "llama_cpp",
+            "langchain", "llama_index", "crewai", "autogen", "huggingface_hub",
+        )
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
+            for token in forbidden
+            if token in text
+        ]
+        assert offenders == []
+
+    def test_no_api_key_setting_exists(self) -> None:
+        """No credential is required to run the editorial workflow."""
+        from ai_news_editor.settings import Settings
+
+        for field in Settings.model_fields:
+            assert "api_key" not in field
+            assert "token" not in field
+            assert "secret" not in field
+
+    def test_no_model_weights_are_referenced(self) -> None:
+        forbidden = (".safetensors", ".gguf", ".onnx", "from_pretrained", "hf_hub_download")
+        offenders = [
+            (name, token)
+            for name, text in self._sources()
+            for token in forbidden
+            if token in text
+        ]
+        assert offenders == []
+
     def test_no_scheduling_or_background_worker_exists(self) -> None:
         forbidden = ("import celery", "APScheduler", "crontab", "import schedule")
         offenders = [
@@ -667,6 +706,17 @@ class TestIngestionCannotReachPublishing:
             name
             for name, text in self._layer(package)
             if "DraftRepository" in text or "ReviewDecisionRepository" in text
+        ]
+        assert offenders == []
+
+    def test_editorial_modules_cannot_publish(self) -> None:
+        """Evaluation says a story is worth covering. It cannot act on that."""
+        forbidden = ("sendMessage", "api.telegram.org", "publish(", "Publisher")
+        offenders = [
+            (name, token)
+            for name, text in self._layer("editorial")
+            for token in forbidden
+            if token in text
         ]
         assert offenders == []
 

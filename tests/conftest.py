@@ -252,3 +252,53 @@ def html_bytes(name: str) -> bytes:
 def hn_bytes(name: str) -> bytes:
     """Read a recorded Hacker News API fixture."""
     return (FIXTURE_HN / name).read_bytes()
+
+
+# --- editorial helpers -----------------------------------------------------
+
+
+def scores_for(default: int, **overrides: int) -> dict[str, int]:
+    """A full set of rubric scores, defaulting every dimension to one value."""
+    from ai_news_editor.editorial.rubric import DIMENSIONS
+
+    scores = dict.fromkeys(DIMENSIONS, default)
+    scores.update(overrides)
+    return scores
+
+
+def make_review(**overrides: object):  # type: ignore[no-untyped-def]
+    """A valid ArticleReview, adjustable per test."""
+    from ai_news_editor.editorial.schema import ArticleReview
+
+    data: dict[str, object] = {
+        "article_id": uuid4(),
+        "content_fingerprint": "f" * 64,
+        "decision": "SHORTLIST",
+        "category": "PRODUCT_UPDATE",
+        "audience": "GENERAL",
+        "scores": scores_for(80),
+        "verification_status": "NOT_REQUIRED",
+        "verification_sources": [],
+        "why_selected": ["new user-facing capability"],
+        "editorial_angle": "What this changes for an ordinary user.",
+    }
+    data.update(overrides)
+    return ArticleReview.model_validate(data)
+
+
+def make_reviewed_batch(reviews: list[object], batch_id: str = "batch-test"):  # type: ignore[no-untyped-def]
+    """A ReviewedBatch wrapping the given reviews."""
+    from ai_news_editor.editorial.rubric import RUBRIC_VERSION, SCHEMA_VERSION
+    from ai_news_editor.editorial.schema import ReviewedBatch
+
+    return ReviewedBatch.model_validate(
+        {
+            "schema_version": SCHEMA_VERSION,
+            "rubric_version": RUBRIC_VERSION,
+            "batch_id": batch_id,
+            "reviewer": "test",
+            "reviews": [
+                r.model_dump(mode="json") if hasattr(r, "model_dump") else r for r in reviews
+            ],
+        }
+    )

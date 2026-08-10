@@ -44,3 +44,33 @@ def compute_content_hash(
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+#: Bumped only if the fields covered by the editorial fingerprint change.
+EDITORIAL_FINGERPRINT_VERSION = 1
+
+
+def compute_editorial_fingerprint(
+    *,
+    title: str,
+    canonical_url: str,
+    excerpt: str | None,
+    published_at: str | None,
+) -> str:
+    """Fingerprint of exactly what an editorial reviewer was shown.
+
+    The same idea as :func:`compute_content_hash` for drafts, applied to evaluation: a
+    judgement is bound to the content state it judged. If the article is later
+    renormalized into different text the fingerprint changes, and the old evaluation is
+    reported as stale rather than silently standing in for a judgement nobody made.
+    """
+    payload = "\n".join(
+        [
+            f"v={EDITORIAL_FINGERPRINT_VERSION}",
+            f"title={title}",
+            f"url={canonical_url}",
+            f"published={published_at or ''}",
+            f"excerpt={excerpt or ''}",
+        ]
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

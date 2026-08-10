@@ -214,7 +214,9 @@ class TestCollectCommand:
                 if isinstance(answer, Exception):
                     raise answer
                 return httpx.Response(
-                    answer.status_code, content=answer.content, headers=dict(answer.headers)  # type: ignore[union-attr]
+                    answer.status_code,
+                    content=answer.content,
+                    headers=dict(answer.headers),  # type: ignore[union-attr]
                 )
 
             return HttpClient(retry_backoff_seconds=0.0, transport=httpx.MockTransport(handler))
@@ -326,9 +328,16 @@ class TestSourcesCommand:
 
     def test_lists_every_configured_source(self) -> None:
         output = output_of(runner.invoke(app, ["sources"]))
-        for source_id in ("openai_news", "google_ai_blog", "huggingface_blog",
-                          "microsoft_365_blog", "techcrunch_ai", "anthropic_news",
-                          "notion_releases", "hackernews"):
+        for source_id in (
+            "openai_news",
+            "google_ai_blog",
+            "huggingface_blog",
+            "microsoft_365_blog",
+            "techcrunch_ai",
+            "anthropic_news",
+            "notion_releases",
+            "hackernews",
+        ):
             assert source_id in output
 
 
@@ -412,3 +421,219 @@ class TestProcessAndStatusCommands:
             assert connection.execute("SELECT COUNT(*) AS n FROM articles").fetchone()["n"] == 1
         finally:
             connection.close()
+
+
+class TestEditorialCommands:
+    """The editorial CLI group, end to end against a temporary database."""
+
+    def _seed(self, tmp_path: Path, count: int = 3) -> None:
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            connection.execute(
+                "INSERT INTO sources (id, name, kind, url, trust_tier, editorial_role, "
+                "created_at, updated_at) VALUES ('alpha', 'Alpha Co', 'RSS', "
+                "'https://alpha.invalid/f', 'OFFICIAL', 'Test source.', "
+                "'2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')"
+            )
+            for i in range(count):
+                raw_id = f"00000000-0000-4000-8000-0000000000{i:02d}"
+                art_id = f"00000000-0000-4000-9000-0000000000{i:02d}"
+                connection.execute(
+                    "INSERT INTO raw_items (id, source_id, external_id, title_original, "
+                    "url_original, payload_raw, content_type, fetched_at) "
+                    "VALUES (?, 'alpha', ?, ?, ?, '{}', 'application/rss+xml', "
+                    "'2026-08-01T00:00:00+00:00')",
+                    (raw_id, f"e{i}", f"Story number {i}", f"https://alpha.invalid/{i}"),
+                )
+                connection.execute(
+                    "INSERT INTO articles (id, raw_item_id, source_id, title, canonical_url, "
+                    "clean_text, published_at, status, created_at, updated_at) "
+                    "VALUES (?, ?, 'alpha', ?, ?, ?, '2026-08-01T00:00:00+00:00', "
+                    "'NORMALIZED', '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00')",
+                    (
+                        art_id,
+                        raw_id,
+                        f"Alpha ships feature number {i} for everyone",
+                        f"https://alpha.invalid/{i}",
+                        f"Body text number {i} describing what changed for users.",
+                    ),
+                )
+        finally:
+            connection.close()
+
+    def _reviewed_from(self, batch_path: Path, **overrides: object) -> dict:
+        import json as _json
+
+        batch = _json.loads(batch_path.read_text(encoding="utf-8"))
+        reviews = []
+        for article in batch["articles"]:
+            review = {
+                "article_id": article["article_id"],
+                "content_fingerprint": article["content_fingerprint"],
+                "decision": "SHORTLIST",
+                "category": "PRODUCT_UPDATE",
+                "audience": "GENERAL",
+                "scores": {
+                    "credibility": 92,
+                    "general_ai_relevance": 88,
+                    "reader_interest": 85,
+                    "usefulness": 80,
+                    "novelty": 70,
+                    "wow_factor": 60,
+                    "virality_potential": 65,
+                    "accessibility": 90,
+                    "consumer_impact": 82,
+                },
+                "verification_status": "NOT_REQUIRED",
+                "verification_sources": [],
+                "why_selected": ["new user-facing capability"],
+                "editorial_angle": "What this changes for an ordinary user.",
+            }
+            review.update(overrides)
+            reviews.append(review)
+        return {
+            "schema_version": batch["schema_version"],
+            "rubric_version": batch["rubric_version"],
+            "batch_id": batch["batch_id"],
+            "reviewer": "test",
+            "reviews": reviews,
+        }
+
+    def _latest_batch(self, tmp_path: Path) -> Path:
+        return next((tmp_path / "editorial_work").glob("batch-*.json"))
+
+    def test_export_writes_a_batch(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+
+        result = runner.invoke(app, ["editorial", "export", "--limit", "3"])
+        assert result.exit_code == 0
+        assert "Editorial batch" in output_of(result)
+        assert self._latest_batch(tmp_path).exists()
+
+    def test_export_reports_nothing_to_do_when_all_evaluated(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+        batch_path = self._latest_batch(tmp_path)
+
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(_json.dumps(self._reviewed_from(batch_path)), encoding="utf-8")
+        runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+
+        result = runner.invoke(app, ["editorial", "export"])
+        assert "No candidates need review" in output_of(result)
+
+    def test_validate_accepts_a_good_file(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(
+            _json.dumps(self._reviewed_from(self._latest_batch(tmp_path))), encoding="utf-8"
+        )
+        result = runner.invoke(app, ["editorial", "validate", str(reviewed_path)])
+        assert result.exit_code == 0
+        assert "Valid" in output_of(result)
+
+    def test_validate_rejects_a_bad_file_without_writing(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+
+        payload = self._reviewed_from(self._latest_batch(tmp_path))
+        payload["reviews"][0]["scores"]["credibility"] = 5  # SHORTLIST below the gate
+        reviewed_path = tmp_path / "bad.json"
+        reviewed_path.write_text(_json.dumps(payload), encoding="utf-8")
+
+        result = runner.invoke(app, ["editorial", "validate", str(reviewed_path)])
+        assert result.exit_code == 1
+        assert "rejected" in output_of(result).lower()
+
+    def test_import_stores_evaluations(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(
+            _json.dumps(self._reviewed_from(self._latest_batch(tmp_path))), encoding="utf-8"
+        )
+        result = runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+        assert result.exit_code == 0
+
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        try:
+            assert connection.execute("SELECT COUNT(*) AS n FROM evaluations").fetchone()["n"] == 3
+        finally:
+            connection.close()
+
+    def test_import_is_idempotent(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(
+            _json.dumps(self._reviewed_from(self._latest_batch(tmp_path))), encoding="utf-8"
+        )
+        runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+        second = runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+        assert second.exit_code == 0
+        assert "Already imported" in output_of(second)
+
+    def test_shortlist_displays_stories(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(
+            _json.dumps(self._reviewed_from(self._latest_batch(tmp_path))), encoding="utf-8"
+        )
+        runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+
+        result = runner.invoke(app, ["editorial", "shortlist"])
+        assert result.exit_code == 0
+        output = output_of(result)
+        assert "EDITORIAL SHORTLIST" in output
+        assert "Alpha ships feature" in output
+
+    def test_shortlist_states_nothing_is_published(self, tmp_path: Path) -> None:
+        import json as _json
+
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        runner.invoke(app, ["editorial", "export"])
+        reviewed_path = tmp_path / "reviewed.json"
+        reviewed_path.write_text(
+            _json.dumps(self._reviewed_from(self._latest_batch(tmp_path))), encoding="utf-8"
+        )
+        runner.invoke(app, ["editorial", "import", str(reviewed_path)])
+        assert "approved, drafted or published" in output_of(
+            runner.invoke(app, ["editorial", "shortlist"])
+        )
+
+    def test_status_reports_editorial_progress(self, tmp_path: Path) -> None:
+        runner.invoke(app, ["db", "init"])
+        self._seed(tmp_path)
+        result = runner.invoke(app, ["editorial", "status"])
+        assert result.exit_code == 0
+        output = output_of(result)
+        assert "awaiting editorial review" in output
+        assert "Stale" in output
+
+    def test_no_publish_or_approve_command_exists(self) -> None:
+        for command in ("publish", "approve", "send"):
+            assert runner.invoke(app, ["editorial", command]).exit_code != 0

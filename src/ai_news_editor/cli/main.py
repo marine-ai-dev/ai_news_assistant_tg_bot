@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ai_news_editor import __version__
+from ai_news_editor.cli.editorial import app as editorial_app
 from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.health import all_ok, run_health_checks
@@ -40,6 +41,7 @@ app = typer.Typer(
 )
 db_app = typer.Typer(name="db", help="Database lifecycle.", no_args_is_help=True)
 app.add_typer(db_app)
+app.add_typer(editorial_app)
 
 #: Literal statements rather than an interpolated table name: no SQL in this codebase
 #: is built by string formatting, not even from trusted constants.
@@ -225,7 +227,7 @@ def collect(
     """
     settings = _load_settings()
     config = _load_sources_config(settings)
-    connection = _open_migrated_database()
+    connection = open_migrated_database()
     try:
         with HttpClient(timeout=config.defaults.timeout_seconds) as http:
             report = collect_sources(
@@ -323,7 +325,7 @@ def process(
     screening only. No LLM is involved, and nothing here decides whether a story is
     interesting — that is a later phase.
     """
-    connection = _open_migrated_database()
+    connection = open_migrated_database()
     try:
         report = run_processing(
             connection, limit=limit, source_ids=list(source) if source else None
@@ -340,7 +342,7 @@ def process(
 @app.command()
 def status() -> None:
     """Show the pipeline funnel: what has been collected, processed and screened."""
-    connection = _open_migrated_database()
+    connection = open_migrated_database()
     try:
         stats = pipeline_stats(connection)
     finally:
@@ -368,7 +370,7 @@ def status() -> None:
     )
 
 
-def _open_migrated_database() -> sqlite3.Connection:
+def open_migrated_database() -> sqlite3.Connection:
     """Open the database, refusing to proceed on a stale schema."""
     settings = _load_settings()
     path = settings.resolved_database_path

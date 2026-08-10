@@ -20,18 +20,21 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from ai_news_editor.domain.clock import UtcDatetime, now_utc
-from ai_news_editor.domain.content import compute_content_hash
+from ai_news_editor.domain.content import compute_content_hash, compute_editorial_fingerprint
 from ai_news_editor.domain.enums import (
     ArticleStatus,
     AudienceTier,
     Category,
     DraftStatus,
     DuplicateReason,
+    EditorialDecision,
+    EvaluatorType,
     FetchOutcome,
     PrefilterReason,
     ReviewAction,
     SourceKind,
     TrustTier,
+    VerificationStatus,
 )
 
 NonEmptyStr = Annotated[str, Field(min_length=1)]
@@ -160,6 +163,47 @@ class DuplicateCandidate(ImmutableDomainModel):
     simhash: int | None = None
     published_at: UtcDatetime | None = None
     text_length: int = 0
+
+
+class Evaluation(ImmutableDomainModel):
+    """One editorial judgement about one article, at one point in time.
+
+    Append-only history. An article can be evaluated again — under a newer rubric, or
+    after its content changes — and every earlier judgement remains queryable. Nothing
+    here is publishable content: an evaluation says a story is *worth covering*, which
+    is a different thing from a draft, and a long way from an approval.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    article_id: UUID
+    schema_version: NonEmptyStr
+    rubric_version: NonEmptyStr
+    evaluator_type: EvaluatorType
+    evaluator: str | None = None
+    batch_id: str | None = None
+    #: The content state that was actually reviewed. See :mod:`editorial.schema`.
+    content_fingerprint: NonEmptyStr
+    decision: EditorialDecision
+    category: Category
+    audience: AudienceTier
+    scores: dict[str, int]
+    #: Derived by Python from ``scores``; the evaluator never supplies it.
+    composite_score: float
+    verification_status: VerificationStatus
+    verification_sources: tuple[dict[str, str], ...] = ()
+    why_selected: tuple[str, ...] = ()
+    editorial_angle: str | None = None
+    notes: str | None = None
+    created_at: UtcDatetime = Field(default_factory=now_utc)
+
+    def is_current_for(self, article: Article, excerpt: str | None) -> bool:
+        """Whether this judgement still describes the content it would be shown today."""
+        return self.content_fingerprint == compute_editorial_fingerprint(
+            title=article.title,
+            canonical_url=article.canonical_url,
+            excerpt=excerpt,
+            published_at=article.published_at.isoformat() if article.published_at else None,
+        )
 
 
 class DraftVersion(ImmutableDomainModel):

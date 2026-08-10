@@ -2,11 +2,15 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: Phase 3 of 7 — deterministic candidate pipeline.** Collects from eight sources
-(RSS, HTML changelogs, Hacker News as community signal), normalizes items into editorial
-candidates, and deduplicates and screens them with deterministic rules. No LLM, no embeddings
-and no Telegram integration yet. See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the
-full design and the remaining phases.
+**Status: Phase 4 of 7 — editorial evaluation.** Collects from eight sources, normalizes and
+deduplicates deterministically, then exports candidates for editorial review and imports ranked
+decisions. No draft writing and no Telegram integration yet. See
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phases.
+
+**There is no LLM API in this project.** The editorial judgement is made by a Claude Code
+session reading an exported batch and writing back structured decisions. Python owns
+collection, storage, validation and ranking; the JSON schema between them is the seam, so an
+automated evaluator could take the same contract later without touching the database.
 
 ## The rule this project is built around
 
@@ -58,6 +62,11 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news collect` | Fetch every enabled source and store new items |
 | `ai-news process` | Normalize, deduplicate and screen collected items |
 | `ai-news status` | Show the pipeline funnel from raw items to evaluation candidates |
+| `ai-news editorial export` | Write a batch of candidates for editorial review |
+| `ai-news editorial validate` | Check a reviewed batch without writing anything |
+| `ai-news editorial import` | Store editorial decisions (all-or-nothing, idempotent) |
+| `ai-news editorial shortlist` | Show the ranked shortlist and any held stories |
+| `ai-news editorial status` | Show editorial progress, including stale evaluations |
 
 `collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
 parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
@@ -91,6 +100,38 @@ whether it is true. Community signals are stored in their own table, can never b
 content, and are refused by the normalizer outright — a Hacker News thread is evidence of
 attention and nothing else. Deciding what to believe is a later phase, and it will always end
 at a human.
+
+## Editorial review
+
+```bash
+ai-news editorial export --limit 15
+```
+
+A Claude Code session reads the batch, applies [docs/editorial_rubric.md](docs/editorial_rubric.md),
+researches anything sensitive or unclear, and writes a reviewed JSON file. Then:
+
+```bash
+ai-news editorial import editorial_work/<batch-id>.reviewed.json
+```
+
+Nine dimensions are scored 0–100. **Python computes the ranking**, not the evaluator: the
+composite comes from validated components using fixed weights, so ordering is deterministic
+whoever did the judging.
+
+`credibility` and `general_ai_relevance` are gates rather than weights. A story cannot make up
+for being unreliable or off-topic by being entertaining — shortlisting needs credibility ≥ 70,
+and a sensitive story (deepfake, scam, accusation) cannot be shortlisted without actual
+verification. A good story with thin evidence becomes `HOLD_FOR_VERIFICATION` rather than being
+thrown away.
+
+Import is strict and all-or-nothing: one bad review and nothing is written. Re-importing the
+same file adds nothing. Evaluations are append-only history, bound by fingerprint to the exact
+content reviewed — if an article is later renormalized, its old evaluation is reported as stale
+instead of quietly standing in for a current one.
+
+Article text in a batch is untrusted data. A story telling the reviewer to score it 100 and
+publish it is just a string in a field: the reviewed schema has no vocabulary for approving or
+publishing anything, and a safety test enforces that.
 
 ## How processing works
 

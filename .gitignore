@@ -25,6 +25,12 @@ build/
 *.egg-info/
 .eggs/
 
+# --- Editorial working files ---------------------------------------------
+# Batch and reviewed JSON are working artefacts holding fetched article text; the
+# decisions they carry live in SQLite once imported.
+editorial_work/*
+!editorial_work/README.md
+
 # --- Tooling caches ------------------------------------------------------
 .pytest_cache/
 .mypy_cache/

@@ -114,6 +114,43 @@ class PrefilterReason(StrEnum):
     LEGAL_OR_INVESTOR_NOTICE = "LEGAL_OR_INVESTOR_NOTICE"
 
 
+class EditorialDecision(StrEnum):
+    """What the editorial layer decided about a candidate story.
+
+    ``HOLD_FOR_VERIFICATION`` exists so that a genuinely interesting story with thin
+    evidence is not thrown away. A viral deepfake claim may be worth covering — but
+    only once someone has checked it. Rejecting it outright would lose the story;
+    shortlisting it would risk publishing something false.
+    """
+
+    SHORTLIST = "SHORTLIST"
+    HOLD_FOR_VERIFICATION = "HOLD_FOR_VERIFICATION"
+    REJECT = "REJECT"
+
+
+class VerificationStatus(StrEnum):
+    """How much independent checking a story's claims received."""
+
+    #: The source is authoritative for the claim — a vendor describing its own product.
+    NOT_REQUIRED = "NOT_REQUIRED"
+    #: Independently corroborated by at least one qualifying source.
+    VERIFIED = "VERIFIED"
+    #: Checking was warranted but did not settle the claim.
+    NEEDS_MORE_EVIDENCE = "NEEDS_MORE_EVIDENCE"
+
+
+class EvaluatorType(StrEnum):
+    """Who produced an evaluation.
+
+    Recorded so that a future automated evaluator's output stays distinguishable from
+    an editorial session's, without changing the storage schema.
+    """
+
+    CLAUDE_CODE = "CLAUDE_CODE"
+    HUMAN = "HUMAN"
+    AUTOMATED = "AUTOMATED"
+
+
 class ReviewAction(StrEnum):
     """What a human did to a draft version during review."""
 

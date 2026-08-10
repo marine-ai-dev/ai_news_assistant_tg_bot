@@ -225,9 +225,7 @@ class TestMigration002:
                 "INSERT INTO source_fetch_state (source_id, updated_at) VALUES ('ghost', 'now')"
             )
 
-    def test_fetch_state_rejects_an_unknown_outcome(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_fetch_state_rejects_an_unknown_outcome(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
             "VALUES ('s', 'S', 'RSS', 'https://s.invalid', 'OFFICIAL', 'now', 'now')"
@@ -248,10 +246,10 @@ class TestMigration002:
 class TestMigration003:
     """Phase-3 additions apply cleanly on a fresh database and on a Phase-2 one."""
 
-    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+    def test_fresh_install_includes_the_phase_3_tables(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh3.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2, 3]
+        assert [m.version for m in applied][:3] == [1, 2, 3]
         assert "community_signals" in _tables(conn)
 
     def test_upgrade_from_a_phase_2_database(self, tmp_path: Path) -> None:
@@ -273,7 +271,8 @@ class TestMigration003:
         )
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [3]
+        assert applied[0].version == 3
+        assert db.schema_version(conn) == len(db.discover_migrations())
         assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
 
     def test_new_article_columns_exist(self, connection: sqlite3.Connection) -> None:
@@ -288,18 +287,14 @@ class TestMigration003:
             "normalized_at",
         } <= columns
 
-    def test_community_signals_require_a_real_source(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_community_signals_require_a_real_source(self, connection: sqlite3.Connection) -> None:
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 "INSERT INTO community_signals (id, source_id, external_id, observed_at) "
                 "VALUES ('x', 'ghost', 'e1', 'now')"
             )
 
-    def test_a_discussion_is_recorded_once_per_source(
-        self, connection: sqlite3.Connection
-    ) -> None:
+    def test_a_discussion_is_recorded_once_per_source(self, connection: sqlite3.Connection) -> None:
         connection.execute(
             "INSERT INTO sources (id, name, kind, url, trust_tier, signal_only, "
             "created_at, updated_at) VALUES ('hn', 'HN', 'HN_SIGNAL', "
@@ -323,3 +318,113 @@ class TestMigration003:
         assert "community_signals" not in second
         assert "simhash" not in first
         assert "simhash" not in second
+
+
+class TestMigration004:
+    """Phase-4 evaluations apply cleanly on a fresh database and on a Phase-3 one."""
+
+    def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
+        conn = db.connect(tmp_path / "fresh4.sqlite3")
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [1, 2, 3, 4]
+        assert "evaluations" in _tables(conn)
+
+    def test_upgrade_from_a_phase_3_database(self, tmp_path: Path) -> None:
+        staged = tmp_path / "upto_003"
+        staged.mkdir()
+        for name in (
+            "001_initial.sql",
+            "002_source_fetch_state.sql",
+            "003_normalization_and_signals.sql",
+        ):
+            (staged / name).write_text(
+                (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        conn = db.connect(tmp_path / "upgrade4.sqlite3")
+        db.migrate(conn, staged)
+        assert db.schema_version(conn) == 3
+        conn.execute(
+            "INSERT INTO sources (id, name, kind, url, trust_tier, created_at, updated_at) "
+            "VALUES ('legacy', 'Legacy', 'RSS', 'https://legacy.invalid', 'OFFICIAL', "
+            "'2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')"
+        )
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [4]
+        assert conn.execute("SELECT COUNT(*) AS n FROM sources").fetchone()["n"] == 1
+
+    def test_evaluations_require_a_real_article(self, connection: sqlite3.Connection) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO evaluations (id, article_id, schema_version, rubric_version, "
+                "evaluator_type, content_fingerprint, decision, category, audience, "
+                "credibility, general_ai_relevance, reader_interest, usefulness, novelty, "
+                "wow_factor, virality_potential, accessibility, consumer_impact, "
+                "composite_score, verification_status, created_at) "
+                "VALUES ('e1', 'ghost', '1', '1', 'CLAUDE_CODE', 'fp', 'SHORTLIST', "
+                "'PRODUCT_UPDATE', 'GENERAL', 90, 90, 90, 90, 90, 90, 90, 90, 90, 90.0, "
+                "'NOT_REQUIRED', 'now')"
+            )
+
+    @pytest.mark.parametrize("column", ["credibility", "reader_interest", "consumer_impact"])
+    def test_scores_outside_zero_to_hundred_are_refused(
+        self, connection: sqlite3.Connection, seeded_article, column: str
+    ) -> None:
+        values = dict.fromkeys(
+            [
+                "credibility",
+                "general_ai_relevance",
+                "reader_interest",
+                "usefulness",
+                "novelty",
+                "wow_factor",
+                "virality_potential",
+                "accessibility",
+                "consumer_impact",
+            ],
+            90,
+        )
+        values[column] = 150
+        columns = ", ".join(values)
+        placeholders = ", ".join("?" for _ in values)
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                f"INSERT INTO evaluations (id, article_id, schema_version, rubric_version, "  # noqa: S608
+                f"evaluator_type, content_fingerprint, decision, category, audience, {columns}, "
+                "composite_score, verification_status, created_at) "
+                f"VALUES ('e1', ?, '1', '1', 'CLAUDE_CODE', 'fp', 'SHORTLIST', 'PRODUCT_UPDATE', "
+                f"'GENERAL', {placeholders}, 90.0, 'NOT_REQUIRED', 'now')",
+                (str(seeded_article.id), *values.values()),
+            )
+
+    def test_unknown_decision_is_refused(
+        self, connection: sqlite3.Connection, seeded_article
+    ) -> None:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO evaluations (id, article_id, schema_version, rubric_version, "
+                "evaluator_type, content_fingerprint, decision, category, audience, "
+                "credibility, general_ai_relevance, reader_interest, usefulness, novelty, "
+                "wow_factor, virality_potential, accessibility, consumer_impact, "
+                "composite_score, verification_status, created_at) "
+                "VALUES ('e1', ?, '1', '1', 'CLAUDE_CODE', 'fp', 'PUBLISH_NOW', "
+                "'PRODUCT_UPDATE', 'GENERAL', 90, 90, 90, 90, 90, 90, 90, 90, 90, 90.0, "
+                "'NOT_REQUIRED', 'now')",
+                (str(seeded_article.id),),
+            )
+
+    def test_earlier_migrations_were_not_altered(self) -> None:
+        """History stays immutable; 004 is additive only.
+
+        Checks for the DDL rather than the bare word: migration 001 legitimately
+        mentions evaluations in a comment explaining which tables it defers.
+        """
+        for name in (
+            "001_initial.sql",
+            "002_source_fetch_state.sql",
+            "003_normalization_and_signals.sql",
+        ):
+            text = (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8").lower()
+            assert "create table evaluations" not in text
+            assert "alter table evaluations" not in text

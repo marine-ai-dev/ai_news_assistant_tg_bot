@@ -1326,7 +1326,51 @@ reinterprets the bits at the boundary; Hamming distance is unaffected.
 **`DuplicateCandidate` lives in the domain layer** so that storage and pipeline can both
 use it without storage importing pipeline, which would break the dependency rule.
 
-### 26.8 One deliberate omission
+### 26.8 Phase 4 notes — the editorial layer is Claude Code, not an LLM API
+
+**This supersedes §14 and the Phase 4 plan.** The original design put an `LLMClient`
+abstraction behind an external provider, with API keys, a token budget and a cost cap.
+That is no longer the architecture.
+
+**Before:** Python calls an LLM provider to screen and score candidates.
+**Now:** Python exports candidates as JSON; a Claude Code session reads them, applies the
+rubric, researches where needed, and writes structured decisions back; Python validates
+and imports them.
+
+Why the change:
+
+* no separate LLM API cost, and no API key to hold, rotate or leak
+* no local model, so no multi-gigabyte weights or RAM pressure on a laptop
+* no provider lock-in — nothing in the codebase depends on any vendor SDK
+* the deterministic Python boundaries get *stronger*, not weaker: editorial output is
+  untrusted input, validated against schema, enums, gates and database state before it
+  is stored
+
+**The replacement boundary is the JSON contract**, not a Python interface. An automated
+evaluator could consume the same `EditorialBatch` and emit the same `ReviewedBatch`
+without a single change to SQLite, the repositories or the pipeline. That is the whole
+point of making the exchange explicit and versioned. `evaluator_type` is already stored
+per evaluation so an automated evaluator's output stays distinguishable from a session's.
+
+Consequences for the plan as written:
+
+* `llm/` package, `LLMClient`, provider modules, `budget.py`, prompt files and the
+  `llm_calls` table are **not built** and are not planned.
+* The three-stage screener/editor/writer funnel collapses to one review pass; cost
+  control was its main justification and there is no per-token cost.
+* §14.4's prompt versioning becomes `rubric_version`, stored on every evaluation.
+* The credibility gate, the weighted composite and the sensitive-category rules survive
+  intact — they were always Python's job, and they still are.
+
+**Ranking stays out of the evaluator's hands.** The reviewed document carries component
+scores only; `composite_score` is computed by `editorial/rubric.py` on import. Two
+evaluations with identical components rank identically whoever produced them.
+
+**Evaluations are append-only and fingerprint-bound**, mirroring the draft-approval
+philosophy: a judgement names the exact content it judged, so renormalizing an article
+makes its old evaluation visibly stale rather than silently current.
+
+### 26.9 One deliberate omission
 
 `draft_versions.category` has no `CHECK` constraint, unlike `audience` and every status
 column. The category vocabulary is editorial and expected to change as the channel
