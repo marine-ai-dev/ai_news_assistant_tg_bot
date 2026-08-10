@@ -2,11 +2,12 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: Phase 5 of 7 — draft writing.** Collects from eight sources, normalizes and
+**Status: Phase 6 of 7 — human review.** Collects from eight sources, normalizes and
 deduplicates deterministically, then exports candidates for editorial review and imports ranked
-decisions, then turns shortlisted stories into Ukrainian draft posts. Drafts stop at
-PENDING_REVIEW — there is no approval interface and no Telegram integration yet. See
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phases.
+decisions, then turns shortlisted stories into Ukrainian draft posts, then puts them in front of
+a human who approves, edits, rejects or sends them back. The pipeline ends at `APPROVED` — there
+is no publisher and no Telegram integration yet. See
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and the remaining phase.
 
 **There is no LLM API in this project.** The editorial judgement is made by a Claude Code
 session reading an exported batch and writing back structured decisions. Python owns
@@ -72,6 +73,9 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news draft validate` | Check finished drafts without writing anything |
 | `ai-news draft import` | Store Draft + DraftVersion records (PENDING_REVIEW) |
 | `ai-news draft list` / `show` | Read drafts back |
+| `ai-news review` | Open the review queue: approve, edit, reject, request a rewrite |
+| `ai-news review status` | Show how many drafts sit in each state |
+| `ai-news review history <draft-id>` | Show every version and every human decision on a draft |
 
 `collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
 parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
@@ -82,8 +86,7 @@ them repeatedly converges instead of accumulating.
 
 `python app.py <command>` works identically without installing the package.
 
-Commands for later phases (`evaluate`, `draft`, `review`, `publish`) are intentionally absent
-rather than present as stubs.
+`publish` is intentionally absent rather than present as a stub.
 
 ## Sources and trust tiers
 
@@ -163,11 +166,52 @@ targets. Being outside a target is reported; nothing is ever silently cropped.
 **Draft ≠ approved. Draft ≠ published.** Every imported draft lands in `PENDING_REVIEW`.
 There is no code path from importing a draft to `APPROVED` or `PUBLISHED`, the writing
 schema has no field that could request one, and safety tests enforce both. Approving a
-post is a separate, explicit human step that does not exist yet.
+post is a separate, explicit human step — the next section.
 
 Python assembles the final post from the headline, body and source line, and computes
 the content hash. A writer supplies parts; it never supplies the text a human will
 eventually approve.
+
+## Human review
+
+```bash
+ai-news review
+```
+
+One draft at a time, best editorial score first, showing the post exactly as it would be
+sent plus the internal writer notes that never are. Then:
+
+| Key | Action | Effect |
+|---|---|---|
+| `A` | Approve | `PENDING_REVIEW → APPROVED`, after typing `APPROVE` in full |
+| `E` | Edit | Opens `$EDITOR`; saving appends version N+1 and stays in review |
+| `R` | Reject | `PENDING_REVIEW → REJECTED`, terminal, nothing is deleted |
+| `W` | Needs rewrite | `PENDING_REVIEW → NEEDS_REWRITE` with a note to work from |
+| `S` / `N` | Skip / Next | Navigation only — records nothing, changes nothing |
+| `Q` | Quit | Stops; everything unreviewed stays exactly as it was |
+
+Approval takes the literal word `APPROVE`. Not `y`, not `yes`, not Enter — a single
+accidental keystroke must not put a post in front of an audience.
+
+`--draft <id>` reviews one draft; `--category <name>` reviews one category. There is no
+`--yes`, no `--approve-all`, no `--auto-approve`, and no threshold that approves by score.
+Those flags are absent because the code behind them does not exist; a safety test asserts
+no such option is ever registered.
+
+**`APPROVED` does not mean published.** It means a human read that exact version and said
+yes. Approval mints a `PublishAuthorization` naming one draft, one version and one content
+hash — and there is no publisher for it to reach yet.
+
+Editing an approved draft invalidates that approval automatically: the new text is a new
+version with a new hash, the storage layer returns the draft to `PENDING_REVIEW`, and the
+old authorization stops verifying. Nobody has to remember to revoke anything.
+
+```bash
+ai-news review history <draft-id>
+```
+
+Every version and every recorded decision, oldest first, with whether a valid publication
+authorization currently exists.
 
 ## How processing works
 
@@ -209,6 +253,8 @@ src/ai_news_editor/
   storage/        SQLite connection, SQL migrations, per-entity repositories
   sources/        source adapters: HTTP boundary, RSS/Atom, config, registry
   pipeline/       orchestration — the only layer combining adapters with storage
+  review/         review actions and $EDITOR integration, independent of any front end
+  publishing/     the approval gate and the publisher protocol — no publisher yet
   observability/  structured logging, secret redaction
   cli/            Typer entry points
 tests/

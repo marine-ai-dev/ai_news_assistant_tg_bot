@@ -18,6 +18,7 @@ from rich.table import Table
 from ai_news_editor import __version__
 from ai_news_editor.cli.draft import app as draft_app
 from ai_news_editor.cli.editorial import app as editorial_app
+from ai_news_editor.cli.review import app as review_app
 from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.health import all_ok, run_health_checks
@@ -44,6 +45,7 @@ db_app = typer.Typer(name="db", help="Database lifecycle.", no_args_is_help=True
 app.add_typer(db_app)
 app.add_typer(editorial_app)
 app.add_typer(draft_app)
+app.add_typer(review_app)
 
 #: Literal statements rather than an interpolated table name: no SQL in this codebase
 #: is built by string formatting, not even from trusted constants.

@@ -1413,3 +1413,63 @@ test now scans the package for any reserved-name collision.
 column. The category vocabulary is editorial and expected to change as the channel
 finds its voice; the domain enum validates it, and a migration per new category would be
 friction for no safety gain. Structural values keep their constraints.
+
+### 26.11 Phase 6 notes (human review and the approval gate)
+
+**No migration 006.** Phase 1 built `review_decisions` with exactly the columns this
+phase needs — `draft_id`, `draft_version_id`, `content_hash`, `action`, `actor`, `note`,
+`created_at` — plus the `draft_version_id` index that `latest_approval` reads through, and
+the append-only triggers the gate now depends on. The schema stays at version 5. Adding a
+migration to prove work was done would have been noise.
+
+**`cli/review.py`, not `cli/{review_loop,render}.py`.** The rendering is a screen and a
+handful of tables, and splitting it across two modules would have separated a display from
+the only thing displaying it. The split that mattered went elsewhere — see below.
+
+**`review/service.py` exists because the CLI is not the last front end.** The plan put the
+review actions in the loop. The channel's review will eventually happen from a phone, via
+a private Telegram bot, and rules that live in a keypress handler have to be reimplemented
+there — which is exactly where a safety rule gets dropped. So reject, rewrite, edit and the
+queue are service functions; the CLI is one caller and a bot will be another. Approval
+stays in `publishing/gate.py`, next to the thing it authorizes.
+
+**Approval requires the typed word `APPROVE`.** Not a `[y/N]` prompt. The failure mode
+being designed against is a tired person pressing Enter through a queue at midnight, and
+`y` is one key away from that. Tests cover `y`, `yes`, `approve` and `Approve` — all cancel.
+
+**Compare-and-swap on the version id.** `approve_draft` and every service action accept
+`expected_version_id`: the version the human actually had on screen. A review session can
+sit open for minutes, and approving whatever happens to be current when a key is finally
+pressed would defeat the point of binding approval to content. The CLI passes the id of
+the version it rendered.
+
+**Reload, then decide.** The gate re-reads the draft from the database rather than trusting
+the object the caller is holding. The caller's copy is at best a snapshot from before the
+human started reading.
+
+**Editing invalidates approval at the storage layer, not in the review code.**
+`append_version` already returned an `APPROVED` draft to `PENDING_REVIEW` (Phase 1). Phase 6
+relies on that rather than re-implementing it — the same invalidation therefore applies to
+any future caller that appends a version, including one nobody has written yet.
+
+**`$EDITOR` gets an argument list and a file, never a command string.** Draft text arrives
+from the internet; a headline is untrusted input. `shlex.split` on `$EDITOR`,
+`subprocess.run([*command, path])`, no `shell=True`, the text passed through a temp file
+that is removed in a `finally`. A test puts `; touch pwned; echo ` in a headline and asserts
+nothing executes.
+
+**Three branches in `verify_publication` are unreachable and stay anyway.** They can only
+fire if a stored `draft_versions` or `review_decisions` row is rewritten, which the
+append-only triggers forbid. They are marked `pragma: no cover - defensive` rather than
+deleted: if a trigger is ever dropped, that is precisely where it must still be caught.
+`publishing/gate.py`, `review/service.py` and `review/editing.py` are each at 100%.
+
+**The absent flags are absent, and a test enforces it.** `--yes`, `-y`, `--approve-all`,
+`--auto-approve` and approval-by-score are not implemented. The test walks Typer's
+registered commands and their option names rather than grepping the source, because the
+first version of it matched a comment explaining why the flags do not exist.
+
+**Still no publisher.** `publishing/base.py` defines the `Publisher` protocol and
+`publish_with_gate` verifies before delegating, but `publishing/` contains no
+implementation — a test asserts the directory holds only `base.py` and `gate.py`. The
+first real transport arrives in Phase 7, against a gate that was already proven.
