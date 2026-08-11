@@ -23,7 +23,7 @@ Two independent dimensions describe every post.
 | Type | What it is | Origin |
 |---|---|---|
 | `NEWS` | Something happened and somebody reported it | An `Article` from a source |
-| `PROMPT` | A prompt the reader can copy and use today | Written here |
+| `PROMPT` | A **tested** workflow somebody demonstrated, retold for our readers | A source, always |
 | `EXPLAINER` | One concept, explained without jargon | Written here |
 
 **Audience** — how much the post may assume, lowest first:
@@ -39,9 +39,15 @@ Editorial guidance for the mix, deliberately **not** enforced anywhere in code: 
 prompts, 15% explainers, 10% viral, 5% deeper science. There is no scheduler and no
 quota — see [docs/telegram_style_guide.md](docs/telegram_style_guide.md).
 
-**Prompts and explainers get no shortcut.** They are written in-house, which makes them
-*more* exposed to invented facts, not less. They enter the same Draft → human review →
-approval gate → publish path as news, and safety tests assert it for every content type.
+**A prompt must rest on a demonstration.** Not an idea that sounds useful — something
+somebody actually ran and wrote up. Each one records who tested it, with what tool, what
+they asked, what happened and what the limits were; a prompt without that is not
+publishable, and a human approving it does not change that. See
+[Prompts and explainers](#prompts-and-explainers).
+
+**Editorial-original content gets no shortcut.** Written in-house means *more* exposed
+to invented facts, not less. Everything enters the same Draft → human review → approval
+gate → publish path as news, and safety tests assert it for every content type.
 
 **There is no LLM API in this project.** The editorial judgement is made by a Claude Code
 session reading an exported batch and writing back structured decisions. Python owns
@@ -425,9 +431,18 @@ ai-news content template
 ```
 
 Writes an empty batch. A Claude Code session fills it in following
-[docs/telegram_style_guide.md](docs/telegram_style_guide.md) — for a prompt: what the
-reader can do, the prompt itself, and how to adapt it; for an explainer: one concept, an
-example from real life, and why it matters. Then:
+[docs/telegram_style_guide.md](docs/telegram_style_guide.md).
+
+**For a prompt, research comes first.** Search for a workflow somebody demonstrated,
+open the source, confirm the evidence is real, and only then write. The batch requires
+the source URL, who tested it, the tool they used, what they asked, what they observed
+and any limitations — all of it, or the import fails. Nothing may be inferred to fill a
+gap: a source that says "ChatGPT" is recorded as "ChatGPT", never as a model version we
+guessed.
+
+For an explainer: one concept, an example from real life, and why it matters. Explainers
+stay editorial-original — they explain rather than report, so they carry references
+where facts need them rather than a tested demonstration. Then:
 
 ```bash
 ai-news content validate content_work/<batch>.content.json
@@ -445,10 +460,17 @@ Creates a `ContentItem` (the editorial substance) plus a Draft in `PENDING_REVIE
 
 **No fake provenance.** An editorial-original draft has `article_id = NULL` and an
 origin of `EDITORIAL_ORIGINAL`; the database refuses a prompt that carries an article and
-refuses a news draft that has none. Posts written here carry no `🔗 Джерело` line,
-because there is no source to name. Factual references — the pricing page you checked
-before describing a free plan — are stored separately, each recording *what claim it
-supports*, and are never dressed up as a source article.
+refuses a news draft that has none.
+
+A prompt post names the demonstration it reports and links to it. An explainer carries no
+`🔗 Джерело` line, because there is no source to name — its factual references are stored
+separately, each recording *what claim it supports*, and are never dressed up as a source
+article.
+
+Prompts written before this rule existed are marked `LEGACY_UNVERIFIED` and can never be
+published. They were not deleted, not rewritten, and not given a source after the fact —
+the honest label for content whose provenance cannot be reconstructed without inventing
+it.
 
 ## Reviewing from your phone
 

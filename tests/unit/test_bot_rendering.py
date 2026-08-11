@@ -196,9 +196,11 @@ class TestCardDetail:
             content_type=ContentType.EXPLAINER,
             subject="Промпт",
             content_item=SimpleNamespace(
+                evidence=None,
+                evidence_status=None,
                 references=(
                     SimpleNamespace(label="OpenAI Help", url="https://help.openai.com/x"),
-                )
+                ),
             ),
         )
         text = render.review_card(item, position=1, total=1)

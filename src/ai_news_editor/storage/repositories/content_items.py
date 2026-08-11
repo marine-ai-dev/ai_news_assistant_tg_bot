@@ -15,19 +15,54 @@ from uuid import UUID
 from ai_news_editor.domain.clock import to_iso
 from ai_news_editor.domain.enums import ContentType
 from ai_news_editor.domain.errors import EntityNotFoundError
-from ai_news_editor.domain.models import ContentItem, ExplainerBody, PromptBody
+from ai_news_editor.domain.models import (
+    ContentItem,
+    ExplainerBody,
+    PromptBody,
+    PromptEvidence,
+)
+
+#: Evidence columns, kept out of the payload blob so a reviewer can be shown each one
+#: and a missing one is a validation error rather than a quiet omission.
+_EVIDENCE_COLUMNS = (
+    "source_url",
+    "source_title",
+    "source_tier",
+    "tested_by",
+    "tool_used",
+    "model_version",
+    "what_was_tested",
+    "observed_result",
+    "checked_at",
+)
 
 
 def _to_domain(row: sqlite3.Row) -> ContentItem:
     data = dict(row)
     payload = json.loads(data.pop("payload_json"))
     references = json.loads(data.pop("references_json"))
-    body: PromptBody | ExplainerBody = (
-        PromptBody.model_validate(payload)
-        if data["content_type"] == ContentType.PROMPT.value
-        else ExplainerBody.model_validate(payload)
+    limitations = json.loads(data.pop("limitations_json"))
+    requires = json.loads(data.pop("requires_json"))
+    representation = data.pop("prompt_representation")
+
+    evidence_fields = {name: data.pop(name) for name in _EVIDENCE_COLUMNS}
+    body: PromptBody | ExplainerBody
+    if data["content_type"] == ContentType.PROMPT.value:
+        if representation is not None:
+            payload["representation"] = representation
+        body = PromptBody.model_validate(payload)
+    else:
+        body = ExplainerBody.model_validate(payload)
+
+    evidence = None
+    if evidence_fields["source_url"]:
+        evidence = PromptEvidence.model_validate(
+            {**evidence_fields, "limitations": limitations, "requires": requires}
+        )
+
+    return ContentItem.model_validate(
+        {**data, "body": body, "references": references, "evidence": evidence}
     )
-    return ContentItem.model_validate({**data, "body": body, "references": references})
 
 
 class ContentItemRepository:
@@ -49,8 +84,13 @@ class ContentItemRepository:
         self._conn.execute(
             """
             INSERT INTO content_items (id, content_type, origin, audience, title, topic,
-                                       payload_json, references_json, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       payload_json, references_json, created_by, created_at,
+                                       evidence_status, prompt_representation,
+                                       source_url, source_title, source_tier, tested_by,
+                                       tool_used, model_version, what_was_tested,
+                                       observed_result, limitations_json, requires_json,
+                                       checked_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(item.id),
@@ -59,12 +99,29 @@ class ContentItemRepository:
                 item.audience.value,
                 item.title,
                 item.topic.value if item.topic else None,
-                json.dumps(item.body.model_dump(mode="json"), ensure_ascii=False),
+                json.dumps(_payload_of(item), ensure_ascii=False),
                 json.dumps(
                     [r.model_dump(mode="json") for r in item.references], ensure_ascii=False
                 ),
                 item.created_by,
                 to_iso(item.created_at),
+                item.evidence_status.value if item.evidence_status else None,
+                (
+                    item.body.representation.value
+                    if isinstance(item.body, PromptBody)
+                    else None
+                ),
+                evidence.source_url if (evidence := item.evidence) else None,
+                evidence.source_title if evidence else None,
+                evidence.source_tier.value if evidence else None,
+                evidence.tested_by if evidence else None,
+                evidence.tool_used if evidence else None,
+                evidence.model_version if evidence else None,
+                evidence.what_was_tested if evidence else None,
+                evidence.observed_result if evidence else None,
+                json.dumps(list(evidence.limitations) if evidence else [], ensure_ascii=False),
+                json.dumps(list(evidence.requires) if evidence else [], ensure_ascii=False),
+                to_iso(evidence.checked_at) if evidence else None,
             ),
         )
         return item
@@ -121,3 +178,10 @@ class ContentItemRepository:
         return int(
             self._conn.execute("SELECT COUNT(*) AS n FROM content_items").fetchone()["n"]
         )
+
+
+def _payload_of(item: ContentItem) -> dict[str, object]:
+    """Body fields for the JSON column, minus the ones promoted to their own columns."""
+    payload = item.body.model_dump(mode="json")
+    payload.pop("representation", None)
+    return payload

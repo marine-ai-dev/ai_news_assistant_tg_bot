@@ -261,8 +261,46 @@ Unchanged from v1. Something happened, somebody else reported it, we have a sour
 
 ### PROMPT — «✨ Спробуйте цей промпт»
 
-Evergreen, practical, immediately usable. Every prompt post must make three things
-obvious:
+> **No source-backed demonstration = no PROMPT post.** This is the rule, and it is
+> enforced in code, not just here.
+
+A prompt post is a **report of a tested use case**, not an invented idea that sounds
+useful. Somebody — a vendor demonstrating their own product, a writer showing their
+work, a person on Reddit describing what happened — must already have run this and
+described the result. We adapt the wording for Ukrainian readers; we do not invent the
+underlying workflow.
+
+Discovery comes first. Search, open the source, confirm there is real evidence, extract
+what was tested and what was observed, *then* write. Never the other way round: writing
+the idea first and hunting for a source afterwards is how a plausible invention acquires
+a citation.
+
+Every prompt item records who tested it, with what tool, what they asked, what happened,
+what the limitations were, and where to find it. If any of that cannot be answered from
+the source, there is no post. Do not fill a gap with something plausible — not the
+author, not the result, not the tool, not the caveats.
+
+**Tested is not proven.** Someone ran this once, in their context. It does not mean it
+works for everyone, on every model, on every plan, or that the result reproduces. Write
+accordingly:
+
+> ✅ «Автор протестував…», «у демонстрації…», «за словами авторки…», «цей підхід
+> спрацював у…»
+>
+> ❌ «цей промпт змусить ChatGPT…», «працює у 100% випадків», «універсальний промпт»
+
+If the source names a tool but not a model version, record the tool and stop.
+"ChatGPT" does not become "GPT-5" because we assumed.
+
+**Reject as sources:** listicles of "100 prompts", SEO pages, copied collections,
+content farms, affiliate posts, and anything that offers a prompt with no sign that
+anyone ran it. The source has to add evidence, not just text.
+
+**Say what it needs.** File upload, web search, a photo, a paid plan — record it and say
+it in the post. A NEWCOMER told to upload a PDF needs to know their plan may not allow
+it.
+
+Every prompt post must make three things obvious:
 
 1. **what the reader can do** with it,
 2. **what to copy** — the prompt itself, in full, in the post,
@@ -306,6 +344,10 @@ available in every tool or every plan. If a prompt is genuinely generic text, «
 
 Topics: `EVERYDAY_LIFE`, `WORK`, `LEARNING`, `CREATIVE`, `TRAVEL`, `SHOPPING`, `FOOD`,
 `PERSONAL_ORGANIZATION`, `FUN`.
+
+**The post carries the source link.** Not as a courtesy — as the thing that lets a
+reader check whether the demonstration convinces them too. The importer refuses a prompt
+post whose body does not contain its source URL.
 
 **Prompt posts are usually `STANDARD`, not `QUICK`.** The prompt itself is often 300–400
 characters before a word of framing, so a `QUICK` prompt post almost always overshoots

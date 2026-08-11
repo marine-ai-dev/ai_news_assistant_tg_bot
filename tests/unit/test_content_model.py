@@ -14,6 +14,7 @@ from ai_news_editor.domain.enums import (
     AudienceTier,
     ContentOrigin,
     ContentType,
+    EvidenceStatus,
     PromptTopic,
 )
 from ai_news_editor.domain.models import (
@@ -205,11 +206,12 @@ class TestContentItem:
             content_type=ContentType.PROMPT,
             audience=AudienceTier.NEWCOMER,
             title="t",
-            topic=PromptTopic.FOOD,
+            topic=PromptTopic.WORK,
             body=prompt_body(),
+            evidence_status=EvidenceStatus.LEGACY_UNVERIFIED,
             created_by="claude-code",
         )
-        assert item.subject == "FOOD"
+        assert item.subject == "WORK"
 
     def test_the_subject_is_the_concept_for_an_explainer(self) -> None:
         item = ContentItem(

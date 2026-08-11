@@ -25,16 +25,19 @@ def output_of(result: object) -> str:
     """Rich hard-wraps at the terminal width; compare on normalized whitespace."""
     return " ".join((getattr(result, "output", "") or "").split())
 
+SOURCE_URL = "https://openai.com/index/example-workflow"
+
 PROMPT_TEXT = (
-    "Я надішлю список продуктів, які є вдома. Запропонуй три прості страви, які з них "
-    "можна приготувати, і напиши, чого не вистачає."
+    "Ось документ. Зроби короткий підсумок головних пунктів і для кожного вкажи "
+    "сторінку, де про це йдеться."
 )
 
 PROMPT_POST = (
-    "Не завжди хочеться думати, що готувати з того, що є. Це можна перекласти на ШІ.\n\n"
-    "📋 Готовий промпт:\n"
+    "Автор перевірив, як ШІ працює з довгим PDF.\n\n"
+    "📋 Промпт:\n"
     f"{PROMPT_TEXT}\n\n"
-    "💡 Як адаптувати: вкажіть, скільки часу у вас є, або попросіть страви без духовки."
+    "💡 Як адаптувати: попросіть цитати замість переказу.\n\n"
+    f"🔗 Джерело: {SOURCE_URL}"
 )
 
 EXPLAINER_POST = (
@@ -49,16 +52,28 @@ EXPLAINER_POST = (
 def prompt_item(**overrides: Any) -> dict[str, Any]:
     item: dict[str, Any] = {
         "content_type": "PROMPT",
-        "title": "Що приготувати з того, що є",
+        "title": "Підсумок довгого документа",
         "audience": "NEWCOMER",
-        "topic": "FOOD",
-        "what_you_can_do": "швидко вирішити, що приготувати",
+        "topic": "WORK",
+        "what_you_can_do": "швидко зрозуміти, про що довгий документ",
         "prompt_text": PROMPT_TEXT,
-        "customization_tips": ["вкажіть, скільки часу у вас є"],
+        "customization_tips": ["попросіть цитати замість переказу"],
         "works_with": None,
+        "evidence": {
+            "source_url": "https://openai.com/index/example-workflow",
+            "source_title": "Example tested workflow",
+            "source_tier": "OFFICIAL_PRODUCT",
+            "tested_by": "OpenAI",
+            "tool_used": "ChatGPT",
+            "what_was_tested": "підсумок довгого PDF із посиланнями на сторінки",
+            "observed_result": "модель повернула структурований підсумок",
+            "limitations": ["у безкоштовному плані завантаження файлів обмежене"],
+            "requires": ["завантаження файлу"],
+        },
+        "representation": "ADAPTED",
         "references": [],
         "post": {
-            "headline": "✨ Промпт: що приготувати з того, що вже є вдома",
+            "headline": "✨ Промпт: підсумок довгого документа",
             "body": PROMPT_POST,
             "category": "EVERYDAY_AI",
             "post_format": "QUICK",
@@ -131,7 +146,10 @@ class TestValidation:
     def test_a_prompt_missing_from_its_own_post_is_refused(self, tmp_path: Path) -> None:
         """The one thing a prompt post must deliver: something to copy."""
         item = prompt_item()
-        item["post"] = {**item["post"], "body": "Дуже корисний промпт. " * 12}
+        item["post"] = {
+            **item["post"],
+            "body": "Дуже корисний промпт. " * 12 + SOURCE_URL,
+        }
         with pytest.raises(ContentImportError, match="copy"):
             load_batch(batch_file(tmp_path, item))
 

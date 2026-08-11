@@ -1810,3 +1810,83 @@ post sitting in a queue for three days is an approval ageing in public.
 turned into something that reports drift rather than enforcing quotas.
 
 Neither is started.
+
+---
+
+## 31. Phase 8.1 — source-backed prompts
+
+A correction, made before scheduling rather than after.
+
+### 31.1 What was wrong
+
+Content Model v2 let a `PROMPT` be editorial-original. In practice that meant inventing
+something plausible and publishing it as advice — and to a reader, a prompt that reads
+well is indistinguishable from a prompt that was shown to work. The channel would have
+been recommending workflows nobody had ever run.
+
+The three Phase-7.5 prompts are exactly this. They are not bad writing; they are
+unsupported claims dressed as useful advice.
+
+### 31.2 The rule
+
+A prompt post is a **report of somebody else's tested use case**. Someone must already
+have run it and described the result: a vendor demonstrating their product, a writer
+showing their work, a person on Reddit saying what happened. We adapt the wording. We do
+not invent the workflow.
+
+`PromptEvidence` records who tested it, with what tool, what they asked, what was
+observed, what the limitations were, what the workflow requires, and when we last looked
+at the source. Every field is mandatory. Nothing may be inferred to fill a gap — a source
+that says "ChatGPT" is stored as "ChatGPT", because guessing a model version is inventing
+evidence, which is the failure the whole contract exists to prevent.
+
+`PromptRepresentation` records whether our prompt is the source's words, our rewording,
+or our reconstruction of a workflow that was described rather than quoted. The default is
+`ADAPTED`, not `VERBATIM_SHORT`: claiming a quotation we did not check is the wrong
+default to hold.
+
+### 31.3 Enforced, not documented
+
+A style-guide paragraph is followed by whoever read it and ignored by the next session
+that did not. So `publishing/eligibility.py` holds the rule and the gate calls it — at
+approval *and* again immediately before a send.
+
+Approval does not override it. That is the point worth stating plainly: a human saying
+"yes, publish this" means *this reads well and I want it out*, which is a different claim
+from *somebody demonstrated this*. The second cannot be supplied by the first.
+
+The check lives next to the gate rather than inside it. The gate answers one question —
+did a human approve this exact version — and a gate that also carries editorial policy is
+a gate that eventually grows an exception.
+
+### 31.4 The old prompts
+
+Marked `LEGACY_UNVERIFIED` by migration 008. Not deleted, not rewritten, not given a
+source after the fact. They stay readable in the database with their review history
+intact, and they can never be published. `evidence_status` is nullable so an explainer
+carries no label at all — an EXPLAINER marked `LEGACY_UNVERIFIED` would read as a problem
+with the explainer, which it is not.
+
+### 31.5 What research actually turned up
+
+Three real sources, all opened and read. Two rejections along the way, both instructive:
+
+* OpenAI Academy's "3 prompts Champions use" is a template list with no named user and
+  no reported outcome — precisely what the quality filter exists to catch.
+* OpenAI's own help-centre and announcement pages returned HTTP 403 to the fetcher. The
+  rule is *open the source*, so they could not be used, however plausible their content.
+
+That left three Google-published sources. **Source diversity is the weak point of this
+batch** and is recorded as such rather than papered over. It is a research constraint,
+not a preference for one vendor.
+
+One of the three is from April 2025 and describes a feature that has since expanded. It
+is used, with its age named in the evidence, in the post, and here — a stale
+demonstration is still a real one, provided nobody pretends otherwise.
+
+### 31.6 Not changed
+
+News is untouched. Explainers stay editorial-original: they explain rather than report,
+and requiring a tested demonstration for "what is a prompt?" would be a category error.
+The review bot gained evidence fields on its card and nothing else — no rebuild of
+polling, authorization, callbacks, editing or the approval UX.

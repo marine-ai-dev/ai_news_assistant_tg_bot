@@ -29,13 +29,19 @@ from ai_news_editor.content.schema import (
     SubmittedItem,
     SubmittedPrompt,
 )
-from ai_news_editor.domain.enums import NON_TECHNICAL_AUDIENCES, ContentType, DraftStatus
+from ai_news_editor.domain.enums import (
+    NON_TECHNICAL_AUDIENCES,
+    ContentType,
+    DraftStatus,
+    EvidenceStatus,
+)
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.domain.models import (
     ContentItem,
     ContentReference,
     ExplainerBody,
     PromptBody,
+    PromptEvidence,
 )
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.storage.repositories import ContentItemRepository, DraftRepository
@@ -44,9 +50,20 @@ from ai_news_editor.writing.schema import STYLE_VERSION
 
 logger = get_logger(__name__)
 
-#: Editorial-original content carries no source line. Stored so the column is honest
-#: about why rather than empty: this material was written here.
+#: An explainer is written here and carries no source line — the column says why rather
+#: than sitting empty.
 EDITORIAL_ATTRIBUTION = "Матеріал каналу"
+
+
+def _attribution_for(submitted: SubmittedItem) -> str:
+    """A prompt names the demonstration it reports; an explainer names this channel."""
+    if isinstance(submitted, SubmittedPrompt):
+        return f"🔗 Джерело: {submitted.evidence.source_title}\n{submitted.evidence.source_url}"
+    return EDITORIAL_ATTRIBUTION
+
+
+def _source_url_for(submitted: SubmittedItem) -> str | None:
+    return submitted.evidence.source_url if isinstance(submitted, SubmittedPrompt) else None
 
 
 class ContentImportError(AiNewsError):
@@ -129,8 +146,8 @@ def import_batch(connection: sqlite3.Connection, path: Path) -> ImportOutcome:
             body=submitted.post.body,
             category=submitted.post.category,
             audience=submitted.audience,
-            source_attribution=EDITORIAL_ATTRIBUTION,
-            source_url=None,
+            source_attribution=_attribution_for(submitted),
+            source_url=_source_url_for(submitted),
             post_format=submitted.post.post_format,
             style_version=batch.style_version,
             hashtags=submitted.post.hashtags,
@@ -159,6 +176,7 @@ def _to_content_item(submitted: SubmittedItem, *, author: str) -> ContentItem:
         for r in submitted.references
     )
     if isinstance(submitted, SubmittedPrompt):
+        evidence = submitted.evidence
         return ContentItem(
             content_type=ContentType.PROMPT,
             audience=submitted.audience,
@@ -169,7 +187,25 @@ def _to_content_item(submitted: SubmittedItem, *, author: str) -> ContentItem:
                 prompt_text=submitted.prompt_text,
                 customization_tips=tuple(submitted.customization_tips),
                 works_with=submitted.works_with,
+                representation=submitted.representation,
             ),
+            evidence=PromptEvidence(
+                source_url=evidence.source_url,
+                source_title=evidence.source_title,
+                source_tier=evidence.source_tier,
+                tested_by=evidence.tested_by,
+                tool_used=evidence.tool_used,
+                model_version=evidence.model_version,
+                what_was_tested=evidence.what_was_tested,
+                observed_result=evidence.observed_result,
+                limitations=tuple(evidence.limitations),
+                requires=tuple(evidence.requires),
+                checked_at=evidence.checked_at,
+            ),
+            # The schema made every evidence field mandatory, so an item that validated
+            # is one whose demonstration was recorded. Whether that demonstration is any
+            # good is a judgement the reviewer makes with it in front of them.
+            evidence_status=EvidenceStatus.VERIFIED_SOURCE_BACKED,
             references=references,
             created_by=author,
         )

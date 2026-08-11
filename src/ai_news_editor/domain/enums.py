@@ -290,3 +290,48 @@ class PublicationStatus(StrEnum):
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     UNCERTAIN = "UNCERTAIN"
+
+
+class EvidenceStatus(StrEnum):
+    """Whether a prompt rests on a real, findable demonstration.
+
+    Introduced in Phase 8.1 to correct a mistake in the content model. Prompts were
+    allowed to be editorial-original, which in practice meant inventing something
+    plausible and presenting it as advice. A prompt that reads well is not a prompt that
+    was shown to work, and the difference is invisible to a reader.
+
+    Only :attr:`VERIFIED_SOURCE_BACKED` may reach a channel.
+    """
+
+    #: Someone published a demonstration of this workflow and the evidence is recorded.
+    VERIFIED_SOURCE_BACKED = "VERIFIED_SOURCE_BACKED"
+    #: A candidate whose source turned out not to demonstrate anything. Kept, not sent.
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+    #: Written before this rule existed. Never publishable, never retro-justified: the
+    #: honest label for content whose provenance we cannot reconstruct without inventing it.
+    LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+
+
+class SourceTier(StrEnum):
+    """How close the evidence sits to whoever actually ran the workflow."""
+
+    #: The vendor's own documentation or demo — OpenAI, Anthropic, Google, Adobe, Canva.
+    OFFICIAL_PRODUCT = "OFFICIAL_PRODUCT"
+    #: A publication, a case study, or a creator tutorial that actually shows the work.
+    REPUTABLE_WRITEUP = "REPUTABLE_WRITEUP"
+    #: A person on Reddit, Hacker News, a forum or YouTube reporting what happened to
+    #: them. Legitimate for this content type — "somebody tried this" is the whole point
+    #: — provided the post never upgrades it into "this works".
+    COMMUNITY_REPORT = "COMMUNITY_REPORT"
+
+
+class PromptRepresentation(StrEnum):
+    """How the prompt in a post relates to the prompt in the source."""
+
+    #: A short prompt reproduced faithfully.
+    VERBATIM_SHORT = "VERBATIM_SHORT"
+    #: Reworded for Ukrainian readers or clarity. Same intent, different words.
+    ADAPTED = "ADAPTED"
+    #: The source described a workflow rather than quoting a prompt; this is our
+    #: reconstruction of it, and it is labelled as such rather than passed off as theirs.
+    WORKFLOW_RECONSTRUCTION = "WORKFLOW_RECONSTRUCTION"

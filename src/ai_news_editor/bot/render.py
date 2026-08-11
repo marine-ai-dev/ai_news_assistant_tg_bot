@@ -131,7 +131,22 @@ def review_card(item: ReviewItem, *, position: int, total: int) -> str:
     elif item.content_item is not None:
         label = "Тема" if draft.content_type is ContentType.PROMPT else "Поняття"
         header.append(f"{label}: {item.subject}")
-        header.append("Матеріал каналу — зовнішнього джерела немає")
+        evidence = item.content_item.evidence
+        if evidence is not None:
+            # A prompt post is a report of someone else's test. The reviewer's job is
+            # to judge that source, so it goes above the fold, not in a footnote.
+            header.append(f"Перевіряв: {evidence.tested_by}")
+            header.append(f"Інструмент: {evidence.tool_used}"
+                          + (f" ({evidence.model_version})" if evidence.model_version else ""))
+            header.append(f"Що тестували: {evidence.what_was_tested}")
+            header.append(f"Результат: {evidence.observed_result}")
+            if evidence.requires:
+                header.append(f"Потрібно: {', '.join(evidence.requires)}")
+            if evidence.limitations:
+                header.append(f"Обмеження: {'; '.join(evidence.limitations)}")
+            header.append(f"Джерело: {evidence.source_url}")
+        else:
+            header.append("Матеріал каналу — зовнішнього джерела немає")
 
     body = [*header, "", _SEPARATOR, "", item.rendered_post, "", _SEPARATOR, ""]
 
@@ -146,6 +161,10 @@ def review_card(item: ReviewItem, *, position: int, total: int) -> str:
         body.append("")
         body.append("_Нотатки (не публікуються):_")
         body.extend(f"_• {note}_" for note in version.writer_notes)
+
+    if item.content_item is not None and item.content_item.evidence_status is not None:
+        body.append("")
+        body.append(f"_доказовість: {item.content_item.evidence_status.value}_")
 
     if item.content_item is not None and item.content_item.references:
         body.append("")

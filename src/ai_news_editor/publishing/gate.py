@@ -18,6 +18,11 @@ the present.
 Everything a caller might want to do instead — approve in bulk, approve by score,
 approve without confirming — is absent on purpose. There is no flag for it because
 there is no code for it.
+
+Content policy lives next door in :mod:`publishing.eligibility` and is called from both
+functions. Keeping it out of this module matters: the gate answers "did a human approve
+this exact version?", and a gate that also carries editorial rules is a gate that
+eventually grows an exception.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from ai_news_editor.domain.errors import (
 from ai_news_editor.domain.models import Draft, DraftVersion, ReviewDecision
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.publishing.base import PublicationReceipt, Publisher
+from ai_news_editor.publishing.eligibility import assert_publishable
 from ai_news_editor.storage.db import transaction
 from ai_news_editor.storage.repositories import DraftRepository, ReviewDecisionRepository
 
@@ -90,6 +96,11 @@ def approve_draft(
             f"draft {draft_id} moved to version {version.version_no} while it was being "
             "reviewed; re-read it before approving"
         )
+
+    # Content policy, checked here so a human learns immediately rather than at the
+    # publish prompt. Approving something that can never be published is a waste of the
+    # only scarce resource in this pipeline.
+    assert_publishable(connection, draft)
 
     decision = ReviewDecision(
         draft_id=draft.id,
@@ -208,6 +219,11 @@ def verify_publication(
     # only ever issued against an APPROVE decision for that exact version. They stay
     # anyway. If those triggers are ever dropped, this is where it must still be caught,
     # and the cost of keeping them is three unreachable branches.
+    # Again, immediately before a send. Approval and publication are separate acts and
+    # policy has to hold at both — an approval recorded before a rule existed must not
+    # carry content past it afterwards.
+    assert_publishable(connection, draft)
+
     version = drafts.current_version(draft.id)
     if not authorization.authorizes(version):  # pragma: no cover - defensive
         raise ApprovalInvalidatedError(

@@ -28,7 +28,9 @@ from ai_news_editor.domain.enums import (
     Category,
     ContentType,
     PostFormat,
+    PromptRepresentation,
     PromptTopic,
+    SourceTier,
 )
 from ai_news_editor.writing.format import (
     MAX_HEADLINE_CHARS,
@@ -87,8 +89,43 @@ class SubmittedPost(StrictModel):
         return self
 
 
+class SubmittedEvidence(StrictModel):
+    """The demonstration a prompt rests on.
+
+    Required, and required in full. A prompt post is a claim that this worked for
+    somebody, and every field here is part of that claim: drop one and the reader is
+    being told something we cannot support.
+
+    Nothing may be inferred to fill a gap. If the source does not name a model version,
+    ``model_version`` stays absent — guessing it is inventing evidence, which is the
+    exact failure this whole contract exists to prevent.
+    """
+
+    source_url: NonEmpty
+    source_title: NonEmpty
+    source_tier: SourceTier
+    tested_by: NonEmpty
+    tool_used: NonEmpty
+    model_version: str | None = None
+    what_was_tested: NonEmpty
+    observed_result: NonEmpty
+    limitations: list[NonEmpty] = Field(default_factory=list, max_length=6)
+    requires: list[NonEmpty] = Field(default_factory=list, max_length=6)
+    checked_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _the_source_is_reachable_in_principle(self) -> Self:
+        if not self.source_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"source_url must be an http(s) link, got {self.source_url!r}. Python "
+                "cannot check that a page exists — verifying the source is the research "
+                "step's job — but a value that could never be a link is refused here."
+            )
+        return self
+
+
 class SubmittedPrompt(StrictModel):
-    """A prompt item: the structure plus the post written around it."""
+    """A prompt item: the demonstration, the structure, and the post written around it."""
 
     content_type: Literal[ContentType.PROMPT] = ContentType.PROMPT
     title: NonEmpty
@@ -98,8 +135,27 @@ class SubmittedPrompt(StrictModel):
     prompt_text: NonEmpty
     customization_tips: list[NonEmpty] = Field(min_length=1, max_length=6)
     works_with: str | None = None
+    #: Required. There is no such thing as a prompt post without one.
+    evidence: SubmittedEvidence
+    #: How the prompt relates to the source's: quoted, reworded, or reconstructed from a
+    #: described workflow. An adapted prompt is never presented as a quotation.
+    representation: PromptRepresentation
     references: list[SubmittedReference] = Field(default_factory=list)
     post: SubmittedPost
+
+    @model_validator(mode="after")
+    def _the_post_links_its_source(self) -> Self:
+        """A reader must be able to go and look at the demonstration themselves.
+
+        The whole point of the correction is that these posts are reports of somebody
+        else's work. A report without a link is indistinguishable from an invention.
+        """
+        if self.evidence.source_url not in self.post.body:
+            raise ValueError(
+                "the post body does not contain the source link; a tested-workflow post "
+                "has to show where the test came from"
+            )
+        return self
 
     @model_validator(mode="after")
     def _the_prompt_is_in_the_post(self) -> Self:
@@ -172,6 +228,7 @@ class ContentBatch(StrictModel):
 __all__ = [
     "CONTENT_SCHEMA_VERSION",
     "ContentBatch",
+    "SubmittedEvidence",
     "SubmittedExplainer",
     "SubmittedItem",
     "SubmittedPost",

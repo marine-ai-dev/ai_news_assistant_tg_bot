@@ -248,21 +248,36 @@ class TestContentAwareReview:
     """The review screen has to describe editorial-original content honestly."""
 
     def _editorial_draft(self, connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
-        from ai_news_editor.domain.enums import ContentType, PromptTopic
-        from ai_news_editor.domain.models import ContentItem, PromptBody
+        from ai_news_editor.domain.enums import (
+            ContentType,
+            EvidenceStatus,
+            PromptTopic,
+            SourceTier,
+        )
+        from ai_news_editor.domain.models import ContentItem, PromptBody, PromptEvidence
         from ai_news_editor.storage.repositories import ContentItemRepository
 
         item = ContentItemRepository(connection).add(
             ContentItem(
                 content_type=ContentType.PROMPT,
                 audience=AudienceTier.NEWCOMER,
-                title="Що приготувати",
-                topic=PromptTopic.FOOD,
+                title="Підсумок документа",
+                topic=PromptTopic.WORK,
                 body=PromptBody(
-                    what_you_can_do="вирішити, що готувати",
-                    prompt_text="Я надішлю список продуктів. Запропонуй три страви з них.",
-                    customization_tips=("вкажіть, скільки часу у вас є",),
+                    what_you_can_do="швидко зрозуміти, про що довгий документ",
+                    prompt_text="Ось документ. Зроби короткий підсумок головних пунктів.",
+                    customization_tips=("попросіть цитати замість переказу",),
                 ),
+                evidence=PromptEvidence(
+                    source_url="https://openai.com/index/example-workflow",
+                    source_title="Example tested workflow",
+                    source_tier=SourceTier.OFFICIAL_PRODUCT,
+                    tested_by="OpenAI",
+                    tool_used="ChatGPT",
+                    what_was_tested="підсумок довгого PDF",
+                    observed_result="структурований підсумок",
+                ),
+                evidence_status=EvidenceStatus.VERIFIED_SOURCE_BACKED,
                 created_by="claude-code",
             )
         )
@@ -274,8 +289,11 @@ class TestContentAwareReview:
             body=GOOD_BODY,
             category=Category.EVERYDAY_AI,
             audience=AudienceTier.NEWCOMER,
-            source_attribution="Матеріал каналу",
-            source_url=None,
+            source_attribution=(
+                "🔗 Джерело: Example tested workflow\n"
+                "https://openai.com/index/example-workflow"
+            ),
+            source_url="https://openai.com/index/example-workflow",
             created_by="claude-code:content_v2",
         )
         drafts.set_status(draft.id, DraftStatus.PENDING_REVIEW)
@@ -290,7 +308,7 @@ class TestContentAwareReview:
         assert item.article is None
         assert item.evaluation is None
         assert item.content_item is not None
-        assert item.subject == "FOOD"
+        assert item.subject == "WORK"
 
     def test_a_news_item_has_no_content_item_subject(
         self, pending, connection: sqlite3.Connection

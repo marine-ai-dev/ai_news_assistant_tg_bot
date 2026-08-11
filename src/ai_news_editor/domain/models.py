@@ -31,13 +31,16 @@ from ai_news_editor.domain.enums import (
     DuplicateReason,
     EditorialDecision,
     EvaluatorType,
+    EvidenceStatus,
     FetchOutcome,
     PostFormat,
     PrefilterReason,
+    PromptRepresentation,
     PromptTopic,
     PublicationStatus,
     ReviewAction,
     SourceKind,
+    SourceTier,
     TrustTier,
     VerificationStatus,
 )
@@ -438,6 +441,51 @@ class ContentReference(ImmutableDomainModel):
     supports: NonEmptyStr
 
 
+class PromptEvidence(ImmutableDomainModel):
+    """Where a prompt came from, and what was actually observed when someone ran it.
+
+    Every field answers a question a reviewer would otherwise have to take on trust:
+    who tried this, with what tool, what did they ask, what happened, and what did they
+    say did *not* work. Structured rather than a prose blob because the review screen
+    shows them individually and because a missing field should be a validation error,
+    not a paragraph that quietly omits something.
+
+    Nothing here may be inferred. If a source says "ChatGPT", ``tool`` is "ChatGPT" —
+    not GPT-5, not GPT-4o. Guessing a model version is inventing evidence.
+    """
+
+    source_url: NonEmptyStr
+    source_title: NonEmptyStr
+    source_tier: SourceTier
+    #: Who ran it, as the source identifies them: an author, a company, "Reddit user
+    #: u/…". Not a guess, and not "the internet".
+    tested_by: NonEmptyStr
+    #: The product named by the source, verbatim.
+    tool_used: NonEmptyStr
+    #: Only when the source states it. A model version is exactly the kind of detail
+    #: that feels safe to infer and is wrong a year later.
+    model_version: str | None = None
+    what_was_tested: NonEmptyStr
+    observed_result: NonEmptyStr
+    #: What the source said did not work, or where it stopped. Empty when the source
+    #: genuinely mentioned none — an honest absence, recorded as one.
+    limitations: tuple[NonEmptyStr, ...] = ()
+    #: Features the workflow depends on: file upload, web search, a paid plan. A
+    #: NEWCOMER told to upload a PDF needs to know their plan may not allow it.
+    requires: tuple[NonEmptyStr, ...] = ()
+    #: When we last looked at the source. Prompt behaviour changes under people.
+    checked_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _the_url_is_a_real_link(self) -> Self:
+        if not self.source_url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"source_url must be an http(s) link, got {self.source_url!r}; a prompt "
+                "without a findable source is not publishable"
+            )
+        return self
+
+
 class PromptBody(ImmutableDomainModel):
     """The structure every prompt post needs.
 
@@ -453,6 +501,9 @@ class PromptBody(ImmutableDomainModel):
     #: Honest compatibility, or nothing. Claiming a prompt works everywhere is a claim
     #: about tools we have not tested, and file upload or browsing is not universal.
     works_with: str | None = None
+    #: How this prompt relates to the one in the source. An adapted prompt is never
+    #: presented as a quotation.
+    representation: PromptRepresentation = PromptRepresentation.ADAPTED
 
     @model_validator(mode="after")
     def _the_prompt_must_be_substantial(self) -> Self:
@@ -505,6 +556,11 @@ class ContentItem(ImmutableDomainModel):
     topic: PromptTopic | None = None
     body: PromptBody | ExplainerBody
     references: tuple[ContentReference, ...] = ()
+    #: Prompts only. The demonstration this post rests on.
+    evidence: PromptEvidence | None = None
+    #: Whether that evidence is good enough to publish. A prompt concept: ``None`` for
+    #: an explainer, which is editorial-original by design and says so.
+    evidence_status: EvidenceStatus | None = None
     created_by: NonEmptyStr
     created_at: UtcDatetime = Field(default_factory=now_utc)
 
@@ -516,12 +572,34 @@ class ContentItem(ImmutableDomainModel):
                 raise ValueError("a PROMPT content item needs a prompt body")
             if self.topic is None:
                 raise ValueError("a PROMPT content item needs a topic")
+            if self.evidence_status is None:
+                raise ValueError(
+                    "a PROMPT needs an evidence status; if its provenance is unknown, "
+                    "say so with LEGACY_UNVERIFIED rather than leaving it blank"
+                )
+            if (
+                self.evidence_status is EvidenceStatus.VERIFIED_SOURCE_BACKED
+                and self.evidence is None
+            ):
+                raise ValueError(
+                    "a PROMPT cannot be marked source-backed without the evidence that "
+                    "backs it"
+                )
         elif self.content_type is ContentType.EXPLAINER:
             if not isinstance(self.body, ExplainerBody):
                 raise ValueError("an EXPLAINER content item needs an explainer body")
             if self.topic is not None:
                 raise ValueError(
                     "an EXPLAINER is described by its concept, not a prompt topic"
+                )
+            if self.evidence is not None:
+                raise ValueError(
+                    "an EXPLAINER carries references, not a tested-prompt demonstration"
+                )
+            if self.evidence_status is not None:
+                raise ValueError(
+                    "evidence status is a PROMPT concept; an EXPLAINER is editorial-"
+                    "original by design"
                 )
         else:
             raise ValueError(

@@ -24,11 +24,18 @@ from ai_news_editor.domain.enums import (
     Category,
     ContentType,
     DraftStatus,
+    EvidenceStatus,
     PostFormat,
     PromptTopic,
+    SourceTier,
 )
 from ai_news_editor.domain.errors import NotApprovedError
-from ai_news_editor.domain.models import ContentItem, ExplainerBody, PromptBody
+from ai_news_editor.domain.models import (
+    ContentItem,
+    ExplainerBody,
+    PromptBody,
+    PromptEvidence,
+)
 from ai_news_editor.publishing.gate import approve_draft, authorization_for_approved_draft
 from ai_news_editor.publishing.service import prepare_publication, publish_draft
 from ai_news_editor.publishing.telegram import TelegramClient, TelegramPublisher
@@ -64,11 +71,11 @@ def make_item(connection: sqlite3.Connection, content_type: ContentType) -> Cont
     body: PromptBody | ExplainerBody
     if content_type is ContentType.PROMPT:
         body = PromptBody(
-            what_you_can_do="швидко вирішити, що приготувати",
-            prompt_text="Я надішлю список продуктів. Запропонуй три прості страви з них.",
-            customization_tips=("вкажіть, скільки часу у вас є",),
+            what_you_can_do="швидко зрозуміти, про що довгий документ",
+            prompt_text="Ось документ. Зроби короткий підсумок головних пунктів.",
+            customization_tips=("попросіть цитати замість переказу",),
         )
-        topic: PromptTopic | None = PromptTopic.FOOD
+        topic: PromptTopic | None = PromptTopic.WORK
     else:
         body = ExplainerBody(
             concept="Промпт",
@@ -78,6 +85,22 @@ def make_item(connection: sqlite3.Connection, content_type: ContentType) -> Cont
         )
         topic = None
 
+    prompt_only: dict[str, object] = (
+        {
+            "evidence": PromptEvidence(
+                source_url="https://openai.com/index/example-workflow",
+                source_title="Example tested workflow",
+                source_tier=SourceTier.OFFICIAL_PRODUCT,
+                tested_by="OpenAI",
+                tool_used="ChatGPT",
+                what_was_tested="підсумок довгого PDF",
+                observed_result="структурований підсумок",
+            ),
+            "evidence_status": EvidenceStatus.VERIFIED_SOURCE_BACKED,
+        }
+        if content_type is ContentType.PROMPT
+        else {}
+    )
     return ContentItemRepository(connection).add(
         ContentItem(
             content_type=content_type,
@@ -86,6 +109,7 @@ def make_item(connection: sqlite3.Connection, content_type: ContentType) -> Cont
             topic=topic,
             body=body,
             created_by="claude-code",
+            **prompt_only,  # type: ignore[arg-type]
         )
     )
 
@@ -102,8 +126,16 @@ def make_draft(
         body=POST_BODY,
         category=Category.EVERYDAY_AI,
         audience=AudienceTier.NEWCOMER,
-        source_attribution="Матеріал каналу",
-        source_url=None,
+        source_attribution=(
+            "🔗 Джерело: Example tested workflow\nhttps://openai.com/index/example-workflow"
+            if content_type is ContentType.PROMPT
+            else "Матеріал каналу"
+        ),
+        source_url=(
+            "https://openai.com/index/example-workflow"
+            if content_type is ContentType.PROMPT
+            else None
+        ),
         post_format=PostFormat.QUICK,
         created_by="claude-code:content_v2",
     )
@@ -201,12 +233,19 @@ class TestNoFakeProvenance:
                 (str(uuid4()), str(uuid4())),
             )
 
-    def test_an_editorial_post_carries_no_source_line(
+    def test_an_explainer_carries_no_source_line(
         self, connection: sqlite3.Connection
     ) -> None:
         """No source exists, so inventing an attribution line would be a small lie."""
         _draft, version = make_draft(connection, ContentType.EXPLAINER)
         assert "🔗 Джерело" not in render_version(version)
+
+    def test_a_prompt_carries_the_source_it_reports(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        """A prompt post is a report of someone else's test, so it names them."""
+        _draft, version = make_draft(connection, ContentType.PROMPT)
+        assert "🔗 Джерело" in render_version(version)
 
     def test_a_news_post_still_carries_its_source_line(
         self, connection: sqlite3.Connection, seeded_article, drafts: DraftRepository

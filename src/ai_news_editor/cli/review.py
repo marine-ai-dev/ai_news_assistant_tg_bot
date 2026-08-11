@@ -171,7 +171,25 @@ def _render_item(
         # would read as a missing source rather than an absent one.
         label = "Topic" if item.draft.content_type is ContentType.PROMPT else "Concept"
         meta.add_row(label, item.subject or "-")
-        meta.add_row("Origin", "written by the channel (no external source)")
+        evidence = item.content_item.evidence
+        if evidence is not None:
+            meta.add_row("Tested by", evidence.tested_by)
+            meta.add_row(
+                "Tool",
+                evidence.tool_used
+                + (f" ({evidence.model_version})" if evidence.model_version else ""),
+            )
+            meta.add_row("What was tested", evidence.what_was_tested)
+            meta.add_row("Observed result", evidence.observed_result)
+            if evidence.requires:
+                meta.add_row("Requires", ", ".join(evidence.requires))
+            if evidence.limitations:
+                meta.add_row("Limitations", "\n".join(evidence.limitations))
+            meta.add_row("Source", f"{evidence.source_title}\n{evidence.source_url}")
+        else:
+            meta.add_row("Origin", "written by the channel (no external source)")
+        if item.content_item.evidence_status is not None:
+            meta.add_row("Evidence", item.content_item.evidence_status.value)
         if item.content_item.references:
             meta.add_row(
                 "Checked against",

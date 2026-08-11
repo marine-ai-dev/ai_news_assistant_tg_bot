@@ -28,11 +28,18 @@ from ai_news_editor.domain.enums import (
     Category,
     ContentType,
     DraftStatus,
+    EvidenceStatus,
     PostFormat,
     PromptTopic,
     ReviewAction,
+    SourceTier,
 )
-from ai_news_editor.domain.models import ContentItem, ExplainerBody, PromptBody
+from ai_news_editor.domain.models import (
+    ContentItem,
+    ExplainerBody,
+    PromptBody,
+    PromptEvidence,
+)
 from ai_news_editor.publishing.gate import approve_draft, authorization_for_approved_draft
 from ai_news_editor.publishing.telegram import TelegramClient
 from ai_news_editor.review.service import review_history
@@ -123,11 +130,11 @@ def editorial_draft(
     topic: PromptTopic | None
     if content_type is ContentType.PROMPT:
         body = PromptBody(
-            what_you_can_do="вирішити, що готувати",
-            prompt_text="Я надішлю список продуктів. Запропонуй три прості страви з них.",
-            customization_tips=("вкажіть, скільки часу у вас є",),
+            what_you_can_do="швидко зрозуміти, про що довгий документ",
+            prompt_text="Ось документ. Зроби короткий підсумок головних пунктів.",
+            customization_tips=("попросіть цитати замість переказу",),
         )
-        topic = PromptTopic.FOOD
+        topic = PromptTopic.WORK
     else:
         body = ExplainerBody(
             concept="Промпт",
@@ -137,6 +144,22 @@ def editorial_draft(
         )
         topic = None
 
+    prompt_only: dict[str, object] = (
+        {
+            "evidence": PromptEvidence(
+                source_url="https://openai.com/index/example-workflow",
+                source_title="Example tested workflow",
+                source_tier=SourceTier.OFFICIAL_PRODUCT,
+                tested_by="OpenAI",
+                tool_used="ChatGPT",
+                what_was_tested="підсумок довгого PDF",
+                observed_result="структурований підсумок",
+            ),
+            "evidence_status": EvidenceStatus.VERIFIED_SOURCE_BACKED,
+        }
+        if content_type is ContentType.PROMPT
+        else {}
+    )
     item = ContentItemRepository(connection).add(
         ContentItem(
             content_type=content_type,
@@ -145,6 +168,7 @@ def editorial_draft(
             topic=topic,
             body=body,
             created_by="claude-code",
+            **prompt_only,  # type: ignore[arg-type]
         )
     )
     drafts = DraftRepository(connection)
@@ -155,8 +179,16 @@ def editorial_draft(
         body=LONG_BODY,
         category=Category.EVERYDAY_AI,
         audience=AudienceTier.NEWCOMER,
-        source_attribution="Матеріал каналу",
-        source_url=None,
+        source_attribution=(
+            "🔗 Джерело: Example tested workflow\nhttps://openai.com/index/example-workflow"
+            if content_type is ContentType.PROMPT
+            else "Матеріал каналу"
+        ),
+        source_url=(
+            "https://openai.com/index/example-workflow"
+            if content_type is ContentType.PROMPT
+            else None
+        ),
         post_format=PostFormat.QUICK,
         created_by="claude-code:content_v2",
     )
@@ -241,14 +273,25 @@ class TestCards:
         assert "📰 NEWS" in transport.texts
         assert "Джерело:" in transport.texts
 
-    def test_a_prompt_card_shows_its_topic_and_origin(
+    def test_a_prompt_card_shows_its_topic_and_the_source_it_reports(
         self, bot: ReviewBot, transport: RecordingApi, connection
     ) -> None:
+        """A prompt post reports someone else's test, so the reviewer judges that test."""
         editorial_draft(connection, ContentType.PROMPT)
         bot.handle(message("/review"))
 
         assert "✨ PROMPT" in transport.texts
-        assert "Тема: FOOD" in transport.texts
+        assert "Тема: WORK" in transport.texts
+        assert "Перевіряв: OpenAI" in transport.texts
+        assert "Інструмент: ChatGPT" in transport.texts
+        assert "https://openai.com/index/example-workflow" in transport.texts
+        assert "VERIFIED_SOURCE_BACKED" in transport.texts
+
+    def test_an_explainer_card_says_there_is_no_external_source(
+        self, bot: ReviewBot, transport: RecordingApi, connection
+    ) -> None:
+        editorial_draft(connection, ContentType.EXPLAINER)
+        bot.handle(message("/review"))
         assert "зовнішнього джерела немає" in transport.texts
 
     def test_an_explainer_card_shows_its_concept(
