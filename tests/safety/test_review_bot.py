@@ -938,3 +938,48 @@ class TestQueueEndings:
         with TelegramClient(TOKEN, transport=transport) as client:
             bot = ReviewBot(BotApi(client), connection, OWNER, Session())
             assert list(poll(bot, iterations=1, sleep=0)) == []
+
+
+class TestLongPollTimeouts:
+    """The bug the first live run found: the client gave up before Telegram answered."""
+
+    def test_the_read_budget_exceeds_the_poll_window(self) -> None:
+        from ai_news_editor.bot.api import LONG_POLL_SECONDS, POLL_READ_MARGIN_SECONDS
+
+        assert POLL_READ_MARGIN_SECONDS > 0
+        assert LONG_POLL_SECONDS + POLL_READ_MARGIN_SECONDS > LONG_POLL_SECONDS
+
+    def test_get_updates_asks_for_a_longer_read_than_it_waits(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        """Otherwise every quiet poll ends in a client-side timeout and nothing arrives."""
+        from ai_news_editor.bot.api import LONG_POLL_SECONDS
+
+        seen: list[float | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.extensions.get("timeout", {}).get("read"))
+            return httpx.Response(200, json={"ok": True, "result": []})
+
+        with TelegramClient(TOKEN, transport=httpx.MockTransport(handler)) as client:
+            BotApi(client).get_updates(None)
+
+        assert seen[0] is not None
+        assert seen[0] > LONG_POLL_SECONDS
+
+    def test_a_publication_send_keeps_the_default_budget(self) -> None:
+        """The override is for polling only; publishing must not wait longer."""
+        seen: list[float | None] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request.extensions.get("timeout", {}).get("read"))
+            return httpx.Response(
+                200, json={"ok": True, "result": {"message_id": 1, "chat": {"id": 2}}}
+            )
+
+        with TelegramClient(TOKEN, transport=httpx.MockTransport(handler)) as client:
+            client.send_message({"chat_id": "@c", "text": "x"})
+
+        from ai_news_editor.publishing.telegram import DEFAULT_TIMEOUT_SECONDS
+
+        assert seen[0] == DEFAULT_TIMEOUT_SECONDS

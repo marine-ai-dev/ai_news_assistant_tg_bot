@@ -231,7 +231,9 @@ class TelegramClient:
         chat = result.get("chat") or {}
         return SentMessage(message_id=int(result["message_id"]), chat_id=str(chat.get("id", "")))
 
-    def request(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def request(
+        self, method: str, payload: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
         """Call any Bot API method that is not a publication.
 
         The review bot's UI calls come through here: getUpdates, answerCallbackQuery,
@@ -240,20 +242,37 @@ class TelegramClient:
         duplicated or missing UI message is an inconvenience, while a duplicated channel
         post is not. That distinction is the reason this is a separate entry point from
         :meth:`send_message`.
+
+        ``timeout`` overrides the client's read budget, which long polling needs: it
+        asks Telegram to hold the connection open, so the client must be willing to
+        wait longer than the server was asked to.
         """
-        return self._call(method, payload)
+        return self._call(method, payload, timeout=timeout)
 
     # -- transport -----------------------------------------------------------
 
     def _call(
-        self, method: str, payload: dict[str, Any], *, sending: bool = False
+        self,
+        method: str,
+        payload: dict[str, Any],
+        *,
+        sending: bool = False,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
         url = f"{self._api_root}/bot{self._token}/{method}"
         attempts = MAX_SEND_ATTEMPTS if sending else 1
 
         for attempt in range(1, attempts + 1):
             try:
-                response = self._client.post(url, json=payload)
+                # Long polling deliberately holds the connection open, so the read
+                # budget has to exceed what the server was asked to wait. Without the
+                # override the client gives up first and every poll looks like a
+                # timeout — which is exactly what it did the first time this ran live.
+                response = (
+                    self._client.post(url, json=payload, timeout=timeout)
+                    if timeout is not None
+                    else self._client.post(url, json=payload)
+                )
             except httpx.TimeoutException as exc:
                 # A timeout on a read means the request was written. Telegram may have
                 # created the post and we simply never heard. This is the one case where

@@ -30,6 +30,11 @@ logger = get_logger(__name__)
 #: Long enough that the loop is not a busy-wait, short enough to shut down promptly.
 LONG_POLL_SECONDS = 25
 
+#: How much longer than the poll the client waits for the response. Telegram answers at
+#: the end of its own window, so the HTTP read budget must be larger — otherwise every
+#: quiet poll ends in a client-side timeout and the bot never receives anything.
+POLL_READ_MARGIN_SECONDS = 15
+
 #: Only these update types are requested. Anything else Telegram might add later is not
 #: silently delivered to a bot that has no idea what to do with it.
 ALLOWED_UPDATES = ("message", "callback_query")
@@ -74,7 +79,9 @@ class BotApi:
         }
         if offset is not None:
             payload["offset"] = offset
-        result = self._client.request("getUpdates", payload)
+        result = self._client.request(
+            "getUpdates", payload, timeout=timeout + POLL_READ_MARGIN_SECONDS
+        )
         updates = result.get("result", [])
         return [u for u in updates if isinstance(u, dict)]
 
