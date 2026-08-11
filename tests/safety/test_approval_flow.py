@@ -548,7 +548,14 @@ class TestNoBypass:
         import ai_news_editor
 
         package_root = Path(ai_news_editor.__file__).parent
-        allowed = {"publishing/telegram.py", "bot/api.py"}
+        allowed = {
+            "publishing/telegram.py",
+            "bot/api.py",
+            # Name the method in a plan or dispatch it to the client; neither opens a
+            # socket. The client is still the only thing that sends.
+            "publishing/plan.py",
+            "publishing/rich.py",
+        }
         offenders = [
             path.relative_to(package_root).as_posix()
             for path in package_root.rglob("*.py")

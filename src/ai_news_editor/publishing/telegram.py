@@ -28,8 +28,11 @@ content that something else already authorized, and it sends it.
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -220,6 +223,68 @@ class TelegramClient:
             return PostingRights(status, False, f"the bot is {status} — add it to the chat")
         return PostingRights(status, None, f"member status is {status!r}")
 
+    def linked_discussion_chat(self, chat_id: str) -> int | None:
+        """The discussion group attached to a channel, if one is linked.
+
+        Channel comments are messages in a linked group; without one there is nowhere
+        for a comment to go. Read-only, and it never invents a group — a channel with no
+        discussion returns None and the caller defers the comment rather than folding it
+        into the post.
+        """
+        result = self._call("getChat", {"chat_id": chat_id})
+        linked = result.get("linked_chat_id")
+        return int(linked) if isinstance(linked, int) else None
+
+    def send_photo(
+        self, chat_id: str, path: Path, *, caption: str | None = None
+    ) -> SentMessage:
+        """Upload one photo, optionally carrying the post as its caption."""
+        data: dict[str, Any] = {"chat_id": chat_id}
+        if caption is not None:
+            data["caption"] = caption
+        return self._send_upload("sendPhoto", data, {"photo": path})
+
+    def send_document(
+        self, chat_id: str, path: Path, *, caption: str | None = None
+    ) -> SentMessage:
+        """Upload one file."""
+        data: dict[str, Any] = {"chat_id": chat_id}
+        if caption is not None:
+            data["caption"] = caption
+        return self._send_upload("sendDocument", data, {"document": path})
+
+    def send_media_group(self, chat_id: str, paths: Sequence[Path]) -> list[SentMessage]:
+        """Upload several photos as one album.
+
+        Each file is attached under its own name and referenced from the media array as
+        ``attach://name`` — the multipart form the Bot API expects. Returns one message
+        per item, in the order they were sent.
+        """
+        media = [
+            {"type": "photo", "media": f"attach://file{index}"}
+            for index, _path in enumerate(paths)
+        ]
+        files = {f"file{index}": path for index, path in enumerate(paths)}
+        data = {"chat_id": chat_id, "media": json.dumps(media)}
+
+        result = self._call_multipart("sendMediaGroup", data, files, sending=True)
+        messages = result.get("result", [])
+        return [
+            SentMessage(
+                message_id=int(m["message_id"]),
+                chat_id=str((m.get("chat") or {}).get("id", "")),
+            )
+            for m in messages
+            if isinstance(m, dict) and "message_id" in m
+        ]
+
+    def _send_upload(
+        self, method: str, data: dict[str, Any], files: dict[str, Path]
+    ) -> SentMessage:
+        result = self._call_multipart(method, data, files, sending=True)
+        chat = result.get("chat") or {}
+        return SentMessage(message_id=int(result["message_id"]), chat_id=str(chat.get("id", "")))
+
     def send_message(self, payload: dict[str, Any]) -> SentMessage:
         """Send one message.
 
@@ -249,6 +314,27 @@ class TelegramClient:
         """
         return self._call(method, payload, timeout=timeout)
 
+    def _call_multipart(
+        self,
+        method: str,
+        data: dict[str, Any],
+        files: dict[str, Path],
+        *,
+        sending: bool = False,
+    ) -> dict[str, Any]:
+        """A Bot API call that uploads files.
+
+        Same error handling and same publication semantics as :meth:`_call` — an upload
+        whose response is lost is just as uncertain as a text send, and just as
+        dangerous to retry.
+        """
+        handles = {name: path.open("rb") for name, path in files.items()}
+        try:
+            return self._call(method, data, sending=sending, files=handles)
+        finally:
+            for handle in handles.values():
+                handle.close()
+
     # -- transport -----------------------------------------------------------
 
     def _call(
@@ -258,6 +344,7 @@ class TelegramClient:
         *,
         sending: bool = False,
         timeout: float | None = None,
+        files: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         url = f"{self._api_root}/bot{self._token}/{method}"
         attempts = MAX_SEND_ATTEMPTS if sending else 1
@@ -268,11 +355,13 @@ class TelegramClient:
                 # budget has to exceed what the server was asked to wait. Without the
                 # override the client gives up first and every poll looks like a
                 # timeout — which is exactly what it did the first time this ran live.
-                response = (
-                    self._client.post(url, json=payload, timeout=timeout)
-                    if timeout is not None
-                    else self._client.post(url, json=payload)
-                )
+                if files is not None:
+                    # Uploads go as multipart; everything else as JSON.
+                    response = self._client.post(url, data=payload, files=files)
+                elif timeout is not None:
+                    response = self._client.post(url, json=payload, timeout=timeout)
+                else:
+                    response = self._client.post(url, json=payload)
             except httpx.TimeoutException as exc:
                 # A timeout on a read means the request was written. Telegram may have
                 # created the post and we simply never heard. This is the one case where

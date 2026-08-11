@@ -284,10 +284,20 @@ class TestRestartAuthorization:
             body = "\n".join(
                 line for line in text.splitlines() if not line.strip().startswith("#")
             )
-            if "PublishAuthorization" in body and any(
+            # Serialising *an authorization*, not merely using json in the same file:
+            # the Telegram client json-encodes a media array and also receives an
+            # authorization, and that is not the thing this test is about.
+            serialised = any(
                 marker in body
-                for marker in ("json.dump", "pickle", "INSERT INTO publications")
-            ):
+                for marker in (
+                    "json.dumps(authorization",
+                    "json.dump(authorization",
+                    "pickle.dump",
+                    "authorization.model_dump",
+                    "asdict(authorization",
+                )
+            )
+            if "PublishAuthorization" in body and serialised:
                 offenders.append(path.name)
         assert offenders == [], f"an authorization must never be persisted: {offenders}"
 

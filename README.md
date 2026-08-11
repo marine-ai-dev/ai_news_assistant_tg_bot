@@ -571,3 +571,46 @@ including the one behind the post already on the channel.
 Phase 8.2 models and reviews the bundle. **Sending media, comments and files to Telegram
 is Phase 8.3** — publication today is still text-only, and a bundle with a comment will
 have its comment reviewed but not yet sent.
+
+## Rich publication
+
+A post may be several Telegram messages: an image, the text, a comment, a file. Telegram
+has no transaction across them, so publication works in a way that admits that.
+
+**The plan is built before anything is sent.** Every file is checked, every call is
+decided, and `--dry-run` prints the exact sequence a real run would make — because it is
+the same function:
+
+```bash
+.venv/bin/ai-news publish <draft-id> --dry-run
+```
+
+```
+1. MEDIA: sendMediaGroup → channel
+   2 images as one album
+2. MAIN: sendMessage → channel
+   the approved post, in full
+—  COMMENT: DEFERRED — the channel has no linked discussion group
+```
+
+**The approved text is never truncated.** Telegram's photo caption limit is smaller than
+many of this channel's posts, so a post that fits travels as a caption and one that does
+not gets its image first and the full text immediately after. Nothing is shortened to
+fit; a human approved specific words.
+
+**Each part is recorded separately.** If the post goes out and the comment fails, the
+post is never sent again — a retry reads the component history, sees `MAIN SUCCEEDED`,
+and sends only what is missing. A component whose outcome was lost blocks the resume
+entirely: it may already be on the channel, and deciding that is a human's job.
+
+**Comments need a linked discussion group.** Telegram channel comments live in the
+group linked to the channel. Without one, a comment is recorded as `DEFERRED` and the
+post still publishes — it is never quietly folded into the post text, because the post
+says the prompt is in the comments and merging them is a different post.
+
+**Source media is never re-uploaded.** An image belonging to a source is recorded by URL
+so a reader can go and look at it. Republishing somebody's image because it was
+convenient is how a channel acquires a complaint.
+
+Files live under `AI_NEWS_MEDIA_DIR` (default `media/`). Nothing outside that directory
+can be published.

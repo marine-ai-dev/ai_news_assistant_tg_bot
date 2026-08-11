@@ -23,6 +23,7 @@ from rich.table import Table
 
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.publishing.message import telegram_length
+from ai_news_editor.publishing.plan import describe
 from ai_news_editor.publishing.service import (
     PublicationPlan,
     approved_drafts,
@@ -288,8 +289,24 @@ def publish(
 
     connection = open_migrated_database()
     try:
+        # Discussion group discovery is read-only and happens before anything is sent:
+        # a comment has nowhere to go without one, and that must be visible in the plan
+        # rather than discovered halfway through a publication.
+        discussion_chat_id: int | None = None
+        with TelegramClient(token) as probe:
+            try:
+                discussion_chat_id = probe.linked_discussion_chat(channel)
+            except AiNewsError as exc:
+                err_console.print(f"[yellow]Could not check for a discussion group:[/yellow] {exc}")
+
         try:
-            plan = prepare_publication(connection, identifier, channel=channel)
+            plan = prepare_publication(
+                connection,
+                identifier,
+                channel=channel,
+                media_root=settings.resolved_media_dir,
+                discussion_chat_id=discussion_chat_id,
+            )
         except AiNewsError as exc:
             err_console.print(f"[bold red]Not publishable:[/bold red] {exc}")
             raise typer.Exit(code=1) from exc
@@ -316,8 +333,8 @@ def publish(
 
         if dry_run:
             console.print(
-                "\n[bold]Dry run.[/bold] The approval was verified and the payload above "
-                "is exactly what would be sent. No Telegram request was made."
+                "\n[bold]Dry run.[/bold] The approval was verified and the plan above is "
+                "exactly what a real run would do. No Telegram send request was made."
             )
             return
 
@@ -386,10 +403,35 @@ def _show_plan(plan: PublicationPlan) -> None:
     meta.add_row("Channel", f"[bold]{plan.channel}[/bold]")
     meta.add_row("Parse mode", plan.message.parse_mode or "plain text")
     meta.add_row("Length", f"{telegram_length(plan.message.payload_text)} / 4096")
+    if plan.version.media:
+        meta.add_row("Media", f"{len(plan.version.media)} asset(s)")
+    if plan.version.comment_text:
+        meta.add_row("Comment", f"{len(plan.version.comment_text)} chars")
+    meta.add_row(
+        "Discussion group",
+        str(plan.discussion_chat_id) if plan.discussion_chat_id else "none linked",
+    )
 
     console.rule("FINAL PREVIEW")
     console.print(meta)
     console.print(Panel(plan.message.approved_text, title="EXACTLY WHAT WILL BE SENT"))
+
+    if plan.version.comment_text:
+        console.print(
+            Panel(plan.version.comment_text, title="COMMENT TO PUBLISH WITH THE POST")
+        )
+
+    if plan.bundle_plan is not None:
+        console.print("\n[bold]PUBLICATION PLAN[/bold]")
+        for line in describe(plan.bundle_plan):
+            console.print(f"  {line}")
+        for warning in plan.bundle_plan.warnings:
+            console.print(f"  [yellow]note:[/yellow] {warning}")
+        if plan.bundle_plan.deferred:
+            console.print(
+                "  [yellow]Some parts cannot be sent yet.[/yellow] The rest will publish; "
+                "the deferred parts are recorded, not dropped."
+            )
 
 
 def _when(value: object) -> str:

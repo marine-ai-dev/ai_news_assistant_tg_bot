@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
 from ai_news_editor.domain.authorization import PublishAuthorization
@@ -40,6 +41,7 @@ from ai_news_editor.observability.redaction import redact
 from ai_news_editor.publishing.base import Publisher
 from ai_news_editor.publishing.gate import authorization_for_approved_draft, verify_publication
 from ai_news_editor.publishing.message import TelegramMessage, build_message
+from ai_news_editor.publishing.plan import BundlePlan, build_plan
 from ai_news_editor.storage.db import transaction
 from ai_news_editor.storage.repositories import DraftRepository, PublicationRepository
 
@@ -62,10 +64,21 @@ class PublicationPlan:
     channel: str
     already_published: Publication | None = None
     unresolved: Publication | None = None
+    #: The ordered Telegram calls this bundle needs. Built before anything is sent, so
+    #: a dry run shows exactly what a real run would do.
+    bundle_plan: BundlePlan | None = None
+    #: The linked discussion group, when the channel has one. None means a comment
+    #: cannot be posted and is deferred rather than folded into the post.
+    discussion_chat_id: int | None = None
 
 
 def prepare_publication(
-    connection: sqlite3.Connection, draft_id: UUID, *, channel: str
+    connection: sqlite3.Connection,
+    draft_id: UUID,
+    *,
+    channel: str,
+    media_root: Path | None = None,
+    discussion_chat_id: int | None = None,
 ) -> PublicationPlan:
     """Validate everything and build the payload, without contacting Telegram.
 
@@ -96,6 +109,15 @@ def prepare_publication(
     if authorization.content_hash != version.content_hash:  # pragma: no cover - defensive
         raise NotApprovedError("the approved content hash does not match the version being sent")
 
+    # Every Telegram call this bundle needs, worked out before any of them is made.
+    # Missing or unusable files raise here, so a bundle fails whole rather than
+    # arriving in pieces.
+    bundle_plan = build_plan(
+        version,
+        media_root=media_root or Path("media"),
+        discussion_available=discussion_chat_id is not None,
+    )
+
     publications = PublicationRepository(connection)
     return PublicationPlan(
         draft=draft,
@@ -105,6 +127,8 @@ def prepare_publication(
         channel=channel,
         already_published=publications.successful_for_version(version.id, channel),
         unresolved=publications.unresolved_for_version(version.id, channel),
+        bundle_plan=bundle_plan,
+        discussion_chat_id=discussion_chat_id,
     )
 
 

@@ -1977,3 +1977,71 @@ found and used; the second use case is a vendor demonstration, labelled `OFFICIA
 rather than dressed up as a user story.
 
 That is one real lifehack, not two. Recorded as a shortfall rather than padded.
+
+---
+
+## 33. Phase 8.3 — Telegram rich publication
+
+Phase 8.2 modelled the bundle. This sends it.
+
+### 33.1 The plan is built before anything is sent
+
+`publishing/plan.py` turns an approved version into an ordered list of Bot API calls,
+checking every file first. A missing image raises before the first send, so a bundle
+fails whole rather than arriving in pieces — the alternative is a post on the channel
+that a human never approved in that form.
+
+`--dry-run` prints that plan. It is the same function a real run uses, so the dry run is
+not an approximation of the sequence; it *is* the sequence.
+
+### 33.2 The caption question
+
+Telegram's photo caption limit is far below its message limit, and a third of this
+project's existing posts already exceed it. Truncating an approved post is out of the
+question: a human approved specific words.
+
+So the approved text always ships in full, in one message. One image plus a short post
+travel together as a caption; anything else sends media first and the post immediately
+after. Decided at plan time, visible in the dry run, never a shortened caption.
+
+The exact caption figure could not be re-read from the documentation in this session
+(the page truncates before the table), so the long-standing documented 1024 is used and
+every plan is measured against it. Being wrong in the safe direction costs one extra
+message.
+
+### 33.3 Components, and why the main post is the thing that matters
+
+Migration 012 adds `publication_components` — one append-only row per part. The existing
+`publications` row still records the attempt as a whole.
+
+That split is what makes resuming safe. "The post went out and the comment failed" is
+not a failed publication and must never be treated as one: re-sending would put a second
+copy on the channel. A retry reads the components, sees `MAIN SUCCEEDED`, and sends only
+what is missing.
+
+A component whose outcome was **lost** blocks the entire resume. It may already exist,
+and no amount of local reasoning can determine which — so the bundle stops and says so.
+
+### 33.4 Comments are a configuration fact, not a code path
+
+Telegram channel comments are messages in the channel's linked discussion group.
+`getChat` reports `linked_chat_id`; the live channel currently has none, so comment
+publication is `DEFERRED_CONFIGURATION`.
+
+The important part is what that does *not* do. It does not fold the comment into the
+post. The approved post says «промпт у коментарях», and publishing it merged with the
+comment would be a different post than the one approved. The main post publishes, the
+comment is recorded as `DEFERRED`, and the reason names the fix.
+
+### 33.5 Source media is never re-uploaded
+
+`publishable_media` excludes `SOURCE_MEDIA`. It belongs to somebody else, it is recorded
+by URL so a reader can look at it, and re-uploading it to a channel is republication of
+another person's work. The one real draft carrying source media plans as text-only,
+which is the correct outcome and was verified against live data.
+
+### 33.6 Verified live, read-only
+
+`getMe`, `getChat`, `getChatMember` and discussion-group discovery all ran against the
+real API. Nothing was sent. Message id 2 and all eighteen stored content hashes are
+unchanged.

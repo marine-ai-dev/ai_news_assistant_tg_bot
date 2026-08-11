@@ -82,6 +82,13 @@ class Settings(BaseSettings):
         ),
     )
 
+    media_dir: Path = Field(
+        default=Path("media"),
+        description=(
+            "Where post images and files live. Every approved asset is a path relative "
+            "to this directory; nothing outside it can be published."
+        ),
+    )
     channel_handle: str = Field(
         default="@learn_ai_easy",
         description=(
@@ -124,7 +131,7 @@ class Settings(BaseSettings):
             ) from None
         return trimmed
 
-    @field_validator("data_dir", "database_path", "sources_config_path")
+    @field_validator("data_dir", "database_path", "sources_config_path", "media_dir")
     @classmethod
     def _expand(cls, value: Path | None) -> Path | None:
         return value.expanduser() if value is not None else None
@@ -149,6 +156,10 @@ class Settings(BaseSettings):
         """Absolute path of the SQLite file."""
         path = self.database_path or (self.data_dir / "ai_news.sqlite3")
         return path.resolve()
+
+    @property
+    def resolved_media_dir(self) -> Path:
+        return self.media_dir.resolve()
 
     def ensure_data_dir(self) -> Path:
         """Create the data directory if needed and return it."""
