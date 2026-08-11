@@ -144,6 +144,22 @@ def split_statements(sql: str) -> list[str]:
     return statements
 
 
+#: A migration declares a table rebuild with this marker on a line of its own. Making
+#: it explicit rather than sniffing for "DROP TABLE" means the dangerous mode is opted
+#: into by the person writing the migration, and is visible when reading the file.
+REBUILD_MARKER = "-- requires: table-rebuild"
+
+
+def needs_table_rebuild(sql: str) -> bool:
+    """Whether a migration declared that it rebuilds a table.
+
+    Rebuilding is how SQLite widens a column constraint (dropping a NOT NULL, say). It
+    needs foreign key enforcement off for the duration, which is a real loosening of
+    safety, so it is never inferred — a migration has to ask for it in writing.
+    """
+    return any(line.strip() == REBUILD_MARKER for line in sql.splitlines())
+
+
 def _ensure_migrations_table(connection: sqlite3.Connection) -> None:
     connection.execute(_SCHEMA_MIGRATIONS_DDL)
 
@@ -182,7 +198,16 @@ def migrate(connection: sqlite3.Connection, directory: Path = MIGRATIONS_DIR) ->
             "applying migration",
             extra={"version": migration.version, "migration": migration.name},
         )
+        rebuilds = needs_table_rebuild(migration.sql)
         try:
+            if rebuilds:
+                # SQLite cannot widen a column constraint in place; the documented fix
+                # is to rebuild the table, and that requires foreign key enforcement to
+                # be off — which SQLite ignores inside a transaction. So the pragma is
+                # set here, around the transaction, never inside it. The rebuild itself
+                # is still atomic, and `PRAGMA foreign_key_check` below refuses to leave
+                # a database whose references stopped resolving.
+                connection.execute("PRAGMA foreign_keys = OFF")
             with transaction(connection) as conn:
                 for statement in split_statements(migration.sql):
                     conn.execute(statement)
@@ -191,10 +216,21 @@ def migrate(connection: sqlite3.Connection, directory: Path = MIGRATIONS_DIR) ->
                     "VALUES (?, ?, ?, ?)",
                     (migration.version, migration.name, migration.checksum, to_iso(now_utc())),
                 )
+            if rebuilds:
+                violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+                if violations:
+                    raise MigrationError(
+                        f"migration {migration.version:03d}_{migration.name} left "
+                        f"{len(violations)} dangling reference(s); the database was "
+                        "changed and must be restored from a backup"
+                    )
         except sqlite3.Error as exc:
             raise MigrationError(
                 f"migration {migration.version:03d}_{migration.name} failed: {exc}"
             ) from exc
+        finally:
+            if rebuilds:
+                connection.execute("PRAGMA foreign_keys = ON")
 
     return pending
 

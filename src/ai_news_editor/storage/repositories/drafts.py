@@ -14,7 +14,13 @@ from collections.abc import Sequence
 from uuid import UUID
 
 from ai_news_editor.domain.clock import now_utc, to_iso
-from ai_news_editor.domain.enums import AudienceTier, Category, DraftStatus, PostFormat
+from ai_news_editor.domain.enums import (
+    AudienceTier,
+    Category,
+    ContentType,
+    DraftStatus,
+    PostFormat,
+)
 from ai_news_editor.domain.errors import EntityNotFoundError, RepositoryError
 from ai_news_editor.domain.models import Draft, DraftVersion
 from ai_news_editor.domain.transitions import assert_draft_transition
@@ -63,7 +69,9 @@ class DraftRepository:
     def create(
         self,
         *,
-        article_id: UUID,
+        article_id: UUID | None = None,
+        content_item_id: UUID | None = None,
+        content_type: ContentType = ContentType.NEWS,
         title: str,
         body: str,
         category: Category,
@@ -77,9 +85,18 @@ class DraftRepository:
         style_version: str | None = None,
         writer_notes: Sequence[str] = (),
     ) -> tuple[Draft, DraftVersion]:
-        """Create a draft together with its first version, atomically."""
+        """Create a draft together with its first version, atomically.
+
+        Takes an article (news) or a content item (prompt, explainer), never both. The
+        Draft model refuses the combinations the database also refuses, so an origin
+        mistake fails here rather than at the INSERT.
+        """
         draft = Draft(
-            article_id=article_id, evaluation_id=evaluation_id, status=DraftStatus.DRAFTED
+            content_type=content_type,
+            article_id=article_id,
+            content_item_id=content_item_id,
+            evaluation_id=evaluation_id,
+            status=DraftStatus.DRAFTED,
         )
         version = DraftVersion(
             draft_id=draft.id,
@@ -99,11 +116,14 @@ class DraftRepository:
 
         with transaction(self._conn) as conn:
             conn.execute(
-                "INSERT INTO drafts (id, article_id, evaluation_id, status, "
-                "current_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, NULL, ?, ?)",
+                "INSERT INTO drafts (id, article_id, content_item_id, content_type, "
+                "evaluation_id, status, current_version_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)",
                 (
                     str(draft.id),
-                    str(draft.article_id),
+                    str(draft.article_id) if draft.article_id else None,
+                    str(draft.content_item_id) if draft.content_item_id else None,
+                    draft.content_type.value,
                     str(evaluation_id) if evaluation_id else None,
                     draft.status.value,
                     to_iso(draft.created_at),
@@ -300,8 +320,14 @@ class DraftRepository:
         return _draft_to_domain(row) if row else None
 
     def article_ids_with_drafts(self) -> set[UUID]:
-        """Articles that already have a draft, so writing does not duplicate them."""
-        rows = self._conn.execute("SELECT DISTINCT article_id FROM drafts").fetchall()
+        """Articles that already have a draft, so writing does not duplicate them.
+
+        Editorial-original drafts have no article, so they are excluded rather than
+        turning into a ``UUID(None)``.
+        """
+        rows = self._conn.execute(
+            "SELECT DISTINCT article_id FROM drafts WHERE article_id IS NOT NULL"
+        ).fetchall()
         return {UUID(row["article_id"]) for row in rows}
 
     def list_all(self, *, limit: int = 100) -> list[Draft]:

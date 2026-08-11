@@ -2,6 +2,7 @@
 
 from ai_news_editor.storage.repositories.articles import ArticleRepository
 from ai_news_editor.storage.repositories.community_signals import CommunitySignalRepository
+from ai_news_editor.storage.repositories.content_items import ContentItemRepository
 from ai_news_editor.storage.repositories.drafts import DraftRepository
 from ai_news_editor.storage.repositories.evaluations import EvaluationRepository
 from ai_news_editor.storage.repositories.publications import PublicationRepository
@@ -13,6 +14,7 @@ from ai_news_editor.storage.repositories.sources import SourceRepository
 __all__ = [
     "ArticleRepository",
     "CommunitySignalRepository",
+    "ContentItemRepository",
     "DraftRepository",
     "EvaluationRepository",
     "PublicationRepository",

@@ -46,7 +46,12 @@ WRITING_SCHEMA_VERSION = "1"
 #: Bumped when the style guide changes in a way that makes older drafts non-comparable.
 #: Stored on every draft version, so a guide revision never silently reinterprets text
 #: written under the previous one.
-STYLE_VERSION = "1"
+#:
+#: v2 (Phase 7.5): the NEWCOMER audience, the jargon rules that come with it, and the
+#: prompt and explainer formats. Text written under v1 assumed a reader who already
+#: used AI tools, so the versions are genuinely not comparable — which is exactly what
+#: this number is for.
+STYLE_VERSION = "2"
 
 #: How much source text a writer receives. Enough to write accurately without shipping
 #: whole article bodies into a batch.

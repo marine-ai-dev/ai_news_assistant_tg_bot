@@ -16,14 +16,22 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from ai_news_editor.domain.clock import now_utc
-from ai_news_editor.domain.enums import Category, DraftStatus, ReviewAction
+from ai_news_editor.domain.enums import Category, ContentType, DraftStatus, ReviewAction
 from ai_news_editor.domain.errors import AiNewsError, RepositoryError
-from ai_news_editor.domain.models import Article, Draft, DraftVersion, Evaluation, ReviewDecision
+from ai_news_editor.domain.models import (
+    Article,
+    ContentItem,
+    Draft,
+    DraftVersion,
+    Evaluation,
+    ReviewDecision,
+)
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.publishing.gate import DEFAULT_ACTOR, MAX_NOTE_CHARS
 from ai_news_editor.storage.db import transaction
 from ai_news_editor.storage.repositories import (
     ArticleRepository,
+    ContentItemRepository,
     DraftRepository,
     EvaluationRepository,
     ReviewDecisionRepository,
@@ -55,8 +63,12 @@ class ReviewItem:
 
     draft: Draft
     version: DraftVersion
-    article: Article
+    #: The source article — news only. Editorial-original content has none, and this
+    #: being None is the honest representation of that.
+    article: Article | None
     evaluation: Evaluation | None
+    #: The prompt or explainer this was written from. News has none.
+    content_item: ContentItem | None = None
 
     @property
     def rendered_post(self) -> str:
@@ -70,6 +82,11 @@ class ReviewItem:
     @property
     def score(self) -> float | None:
         return self.evaluation.composite_score if self.evaluation else None
+
+    @property
+    def subject(self) -> str | None:
+        """The prompt topic or the explainer concept, for the review screen."""
+        return self.content_item.subject if self.content_item else None
 
 
 def review_queue(
@@ -87,6 +104,7 @@ def review_queue(
     drafts = DraftRepository(connection)
     articles = ArticleRepository(connection)
     evaluations = EvaluationRepository(connection)
+    content_items = ContentItemRepository(connection)
 
     if draft_id is not None:
         candidates = [drafts.get(draft_id)]
@@ -104,8 +122,17 @@ def review_queue(
             ReviewItem(
                 draft=draft,
                 version=version,
-                article=articles.get(draft.article_id),
-                evaluation=evaluations.latest_for_article(draft.article_id),
+                article=articles.get(draft.article_id) if draft.article_id else None,
+                evaluation=(
+                    evaluations.latest_for_article(draft.article_id)
+                    if draft.article_id
+                    else None
+                ),
+                content_item=(
+                    content_items.get(draft.content_item_id)
+                    if draft.content_item_id
+                    else None
+                ),
             )
         )
 
@@ -203,6 +230,7 @@ def apply_edit(
         body=body,
         source_label=source_label_of(current.source_attribution),
         source_url=source_url_of(current),
+        require_source=draft.content_type is ContentType.NEWS,
     )
     if problem:
         raise ReviewError(problem)
@@ -258,18 +286,29 @@ def apply_edit(
 
 
 def validate_edit(
-    *, headline: str, body: str, source_label: str, source_url: str
+    *,
+    headline: str,
+    body: str,
+    source_label: str,
+    source_url: str,
+    require_source: bool = True,
 ) -> str | None:
     """Check edited text against the same rules a written draft must satisfy.
 
     Returns a problem description, or ``None`` if the text is publishable. Nothing is
     corrected or shortened automatically — a human edit that breaks a limit is reported
     back to the human.
+
+    ``require_source`` is False only for editorial-original content, which has no source
+    to lose. News keeps the requirement: an edit must not be able to strip the link that
+    lets a reader check the claim.
     """
     if not headline.strip():
         return "the headline is empty"
     if not body.strip():
         return "the body is empty"
+    if require_source and not source_url.strip():
+        return "the source URL is missing; a news post must stay traceable"
 
     for field_name, text in (("headline", headline), ("body", body)):
         bad = disallowed_tags(text)

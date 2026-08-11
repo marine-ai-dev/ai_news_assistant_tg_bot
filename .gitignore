@@ -32,6 +32,9 @@ editorial_work/*
 !editorial_work/README.md
 writing_work/*
 !writing_work/README.md
+# Prompt and explainer batches are drafts of unpublished editorial content. Same rule.
+content_work/*
+!content_work/README.md
 
 # --- Tooling caches ------------------------------------------------------
 .pytest_cache/

@@ -202,11 +202,81 @@ SENSITIVE_CATEGORIES: frozenset[Category] = frozenset(
 
 
 class AudienceTier(StrEnum):
-    """How much AI familiarity a post assumes of its reader."""
+    """How much AI familiarity a post assumes of its reader.
 
+    An ordered scale, lowest first. NEWCOMER was added in Phase 7.5 because the channel
+    is for ordinary people, and "beginner" had quietly come to mean "beginner developer"
+    — someone who knows what an API is and has simply not used this particular tool.
+    A NEWCOMER may have opened ChatGPT once and does not know what an agent is.
+    """
+
+    NEWCOMER = "NEWCOMER"
     BEGINNER = "BEGINNER"
     GENERAL = "GENERAL"
     TECH_CURIOUS = "TECH_CURIOUS"
+
+
+#: The scale in order, least assumed knowledge first. Written once here so nothing has
+#: to re-derive it from declaration order.
+AUDIENCE_ORDER: tuple[AudienceTier, ...] = (
+    AudienceTier.NEWCOMER,
+    AudienceTier.BEGINNER,
+    AudienceTier.GENERAL,
+    AudienceTier.TECH_CURIOUS,
+)
+
+#: Audiences that assume no technical background. Content for these readers is held to
+#: the jargon rules in the style guide.
+NON_TECHNICAL_AUDIENCES: frozenset[AudienceTier] = frozenset(
+    {AudienceTier.NEWCOMER, AudienceTier.BEGINNER}
+)
+
+
+class ContentType(StrEnum):
+    """What kind of thing a post is — a format, not a subject.
+
+    Deliberately not a Category. A category says what a piece of news is about; this
+    says whether the piece is news at all. A prompt about cooking and a news story about
+    cooking apps are different products for the reader: one is something to try, the
+    other is something that happened.
+    """
+
+    #: Sourced from an article somebody else published. The Phase 1-7 pipeline.
+    NEWS = "NEWS"
+    #: A ready-to-use prompt the reader can copy. Usually evergreen.
+    PROMPT = "PROMPT"
+    #: One concept explained without assuming technical background.
+    EXPLAINER = "EXPLAINER"
+
+
+class ContentOrigin(StrEnum):
+    """Where a piece of content came from.
+
+    Recorded explicitly so "no article" never has to be read as "we forgot the source".
+    Editorial-original content is written by this newsroom; saying so is the honest
+    alternative to manufacturing a source article for it.
+    """
+
+    SOURCED_ARTICLE = "SOURCED_ARTICLE"
+    EDITORIAL_ORIGINAL = "EDITORIAL_ORIGINAL"
+
+
+class PromptTopic(StrEnum):
+    """What a prompt helps with, in the reader's terms rather than the industry's.
+
+    A small vocabulary on purpose. These are the situations someone actually finds
+    themselves in — not a taxonomy of AI capabilities.
+    """
+
+    EVERYDAY_LIFE = "EVERYDAY_LIFE"
+    WORK = "WORK"
+    LEARNING = "LEARNING"
+    CREATIVE = "CREATIVE"
+    TRAVEL = "TRAVEL"
+    SHOPPING = "SHOPPING"
+    FOOD = "FOOD"
+    PERSONAL_ORGANIZATION = "PERSONAL_ORGANIZATION"
+    FUN = "FUN"
 
 
 class PublicationStatus(StrEnum):

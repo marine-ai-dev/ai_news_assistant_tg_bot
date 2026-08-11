@@ -242,3 +242,80 @@ class TestSourceRecovery:
         from ai_news_editor.writing.format import source_url_of
 
         assert source_url_of(self._version("🔗 Джерело: Alpha", None)) == ""
+
+
+class TestContentAwareReview:
+    """The review screen has to describe editorial-original content honestly."""
+
+    def _editorial_draft(self, connection: sqlite3.Connection):  # type: ignore[no-untyped-def]
+        from ai_news_editor.domain.enums import ContentType, PromptTopic
+        from ai_news_editor.domain.models import ContentItem, PromptBody
+        from ai_news_editor.storage.repositories import ContentItemRepository
+
+        item = ContentItemRepository(connection).add(
+            ContentItem(
+                content_type=ContentType.PROMPT,
+                audience=AudienceTier.NEWCOMER,
+                title="Що приготувати",
+                topic=PromptTopic.FOOD,
+                body=PromptBody(
+                    what_you_can_do="вирішити, що готувати",
+                    prompt_text="Я надішлю список продуктів. Запропонуй три страви з них.",
+                    customization_tips=("вкажіть, скільки часу у вас є",),
+                ),
+                created_by="claude-code",
+            )
+        )
+        drafts = DraftRepository(connection)
+        draft, _version = drafts.create(
+            content_item_id=item.id,
+            content_type=ContentType.PROMPT,
+            title="✨ Промпт: що приготувати",
+            body=GOOD_BODY,
+            category=Category.EVERYDAY_AI,
+            audience=AudienceTier.NEWCOMER,
+            source_attribution="Матеріал каналу",
+            source_url=None,
+            created_by="claude-code:content_v2",
+        )
+        drafts.set_status(draft.id, DraftStatus.PENDING_REVIEW)
+        return draft
+
+    def test_the_queue_carries_the_content_item_and_no_article(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        draft = self._editorial_draft(connection)
+        item = next(i for i in review_queue(connection) if i.draft.id == draft.id)
+
+        assert item.article is None
+        assert item.evaluation is None
+        assert item.content_item is not None
+        assert item.subject == "FOOD"
+
+    def test_a_news_item_has_no_content_item_subject(
+        self, pending, connection: sqlite3.Connection
+    ) -> None:
+        draft, _ = pending
+        item = next(i for i in review_queue(connection) if i.draft.id == draft.id)
+        assert item.content_item is None
+        assert item.subject is None
+
+    def test_an_editorial_edit_does_not_require_a_source(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        """News keeps its link; original content has none to keep."""
+        draft = self._editorial_draft(connection)
+        _updated, version = apply_edit(
+            connection, draft.id, headline="✨ Змінено", body=GOOD_BODY
+        )
+        assert version.version_no == 2
+
+    def test_an_unparseable_source_url_is_reported_rather_than_raised(self) -> None:
+        problem = validate_edit(
+            headline="Заголовок",
+            body=GOOD_BODY,
+            source_label="Alpha",
+            source_url="ftp://a.invalid/x",
+        )
+        assert problem is not None
+        assert "http" in problem

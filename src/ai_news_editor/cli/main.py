@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from ai_news_editor import __version__
+from ai_news_editor.cli.content import app as content_app
 from ai_news_editor.cli.draft import app as draft_app
 from ai_news_editor.cli.editorial import app as editorial_app
 from ai_news_editor.cli.publish import publication_app, publish, telegram_app
@@ -46,6 +47,7 @@ db_app = typer.Typer(name="db", help="Database lifecycle.", no_args_is_help=True
 app.add_typer(db_app)
 app.add_typer(editorial_app)
 app.add_typer(draft_app)
+app.add_typer(content_app)
 app.add_typer(review_app)
 app.add_typer(publication_app)
 app.add_typer(telegram_app)
@@ -61,6 +63,7 @@ _COUNT_QUERIES = {
     "articles": "SELECT COUNT(*) AS n FROM articles",
     "drafts": "SELECT COUNT(*) AS n FROM drafts",
     "draft_versions": "SELECT COUNT(*) AS n FROM draft_versions",
+    "content_items": "SELECT COUNT(*) AS n FROM content_items",
     "review_decisions": "SELECT COUNT(*) AS n FROM review_decisions",
     "publications": "SELECT COUNT(*) AS n FROM publications",
 }

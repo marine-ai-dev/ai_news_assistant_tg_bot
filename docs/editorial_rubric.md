@@ -118,9 +118,37 @@ Pick one category from the controlled vocabulary: `PRODUCT_UPDATE`, `USEFUL_TOOL
 `DEEPFAKE_WATCH`, `SCAM_MISINFO` and `AI_DRAMA` are **sensitive** and carry the stricter
 verification rule above.
 
-Audience is `BEGINNER`, `GENERAL` or `TECH_CURIOUS`. Most shortlisted stories should be
-BEGINNER or GENERAL. `TECH_CURIOUS` is for stories that genuinely need some background —
-not a place to park anything mildly technical.
+Audience is `NEWCOMER`, `BEGINNER`, `GENERAL` or `TECH_CURIOUS`, lowest first.
+
+| Level | For a reader who |
+|---|---|
+| `NEWCOMER` | may have opened ChatGPT once; does not know what an API, an agent or Notion is |
+| `BEGINNER` | uses an AI chat sometimes and knows what a prompt is |
+| `GENERAL` | is comfortable with consumer AI tools |
+| `TECH_CURIOUS` | follows the field and knows what a model release is |
+
+**Audience is a judgement about the story, not about the prose.** The question is *who
+does this actually matter to*, not *how simply could this be written*. Almost anything
+can be simplified; that is not the test.
+
+Score a story `NEWCOMER` when its subject has obvious everyday relevance to someone with
+no AI background — a new voice feature in a phone app, a scam people are falling for, a
+free tool that does something useful without any setup. The reader should be able to act
+on it, or be glad they know it, tomorrow.
+
+Do **not** score a story `NEWCOMER` because its prose could be simplified. A developer
+API change, a model benchmark, an infrastructure announcement or a funding round is
+`TECH_CURIOUS` no matter how gently it is worded — the person it matters to is the
+person who follows the field. Forcing it down the scale produces a post that explains a
+lot and means nothing.
+
+Aim for roughly 40–50% of shortlisted stories at `NEWCOMER` or `BEGINNER` across a batch.
+That is planning guidance for the mix, not a quota to satisfy per story — never move a
+single story's audience to hit a ratio.
+
+Existing evaluations keep the audience they were given. Nothing is reclassified
+retroactively; if a story is genuinely worth re-judging, re-evaluate it deliberately and
+it will get a new evaluation of its own.
 
 ## Editorial angle
 

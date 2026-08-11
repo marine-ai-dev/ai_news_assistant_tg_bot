@@ -2,13 +2,46 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: core MVP complete (phases 1-7).** Collects from eight sources, normalizes and
+**Status: core MVP complete and live-tested; content model v2 (phase 7.5).** Collects from eight sources, normalizes and
 deduplicates deterministically, exports candidates for editorial review and imports ranked
 decisions, turns shortlisted stories into Ukrainian draft posts, puts them in front of a human
 who approves, edits, rejects or sends them back — and publishes an approved post to a Telegram
 channel after a second explicit confirmation. See
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and what was deliberately
 left for later.
+
+## Who the channel is for
+
+Ordinary people, not the industry. That includes people who barely use AI: someone who
+has opened ChatGPT once, does not know what an API is, has never heard of Notion, and is
+not sure whether ChatGPT, Claude and Gemini are different things.
+
+Two independent dimensions describe every post.
+
+**Content type** — what kind of thing it is:
+
+| Type | What it is | Origin |
+|---|---|---|
+| `NEWS` | Something happened and somebody reported it | An `Article` from a source |
+| `PROMPT` | A prompt the reader can copy and use today | Written here |
+| `EXPLAINER` | One concept, explained without jargon | Written here |
+
+**Audience** — how much the post may assume, lowest first:
+
+`NEWCOMER` → `BEGINNER` → `GENERAL` → `TECH_CURIOUS`
+
+`NEWCOMER` assumes nothing. Audience is a judgement about *who a story matters to*, not
+about how simply it could be written — a developer API change is `TECH_CURIOUS` however
+gently it is worded.
+
+Editorial guidance for the mix, deliberately **not** enforced anywhere in code: roughly
+40–50% of posts at `NEWCOMER`/`BEGINNER`; roughly 30% news, 20% product updates, 20%
+prompts, 15% explainers, 10% viral, 5% deeper science. There is no scheduler and no
+quota — see [docs/telegram_style_guide.md](docs/telegram_style_guide.md).
+
+**Prompts and explainers get no shortcut.** They are written in-house, which makes them
+*more* exposed to invented facts, not less. They enter the same Draft → human review →
+approval gate → publish path as news, and safety tests assert it for every content type.
 
 **There is no LLM API in this project.** The editorial judgement is made by a Claude Code
 session reading an exported batch and writing back structured decisions. Python owns
@@ -76,6 +109,10 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news draft validate` | Check finished drafts without writing anything |
 | `ai-news draft import` | Store Draft + DraftVersion records (PENDING_REVIEW) |
 | `ai-news draft list` / `show` | Read drafts back |
+| `ai-news content template` | Write an empty prompt/explainer batch to fill in |
+| `ai-news content validate` | Check a batch, with jargon warnings, writing nothing |
+| `ai-news content import` | Store content items + drafts (PENDING_REVIEW) |
+| `ai-news content list` | Read stored prompts and explainers |
 | `ai-news review` | Open the review queue: approve, edit, reject, request a rewrite |
 | `ai-news review status` | Show how many drafts sit in each state |
 | `ai-news review history <draft-id>` | Show every version and every human decision on a draft |
@@ -365,6 +402,7 @@ src/ai_news_editor/
   storage/        SQLite connection, SQL migrations, per-entity repositories
   sources/        source adapters: HTTP boundary, RSS/Atom, config, registry
   pipeline/       orchestration — the only layer combining adapters with storage
+  content/        prompts and explainers: the batch contract, import, jargon warnings
   review/         review actions and $EDITOR integration, independent of any front end
   publishing/     the approval gate, the Telegram client, and the send-once orchestration
   observability/  structured logging, secret redaction
@@ -375,3 +413,37 @@ tests/
   integration/    database, repositories, collection pipeline, CLI
   safety/         approval invariants and integration boundaries
 ```
+
+## Prompts and explainers
+
+Not everything worth publishing is news. Two formats are written in-house.
+
+```bash
+ai-news content template
+```
+
+Writes an empty batch. A Claude Code session fills it in following
+[docs/telegram_style_guide.md](docs/telegram_style_guide.md) — for a prompt: what the
+reader can do, the prompt itself, and how to adapt it; for an explainer: one concept, an
+example from real life, and why it matters. Then:
+
+```bash
+ai-news content validate content_work/<batch>.content.json
+```
+
+Checks structure and flags jargon that a `NEWCOMER` post uses without an apparent
+explanation. That check is a reading aid with a crude heuristic — it misses things and
+occasionally flags a term you did explain. It never blocks an import.
+
+```bash
+ai-news content import content_work/<batch>.content.json
+```
+
+Creates a `ContentItem` (the editorial substance) plus a Draft in `PENDING_REVIEW`.
+
+**No fake provenance.** An editorial-original draft has `article_id = NULL` and an
+origin of `EDITORIAL_ORIGINAL`; the database refuses a prompt that carries an article and
+refuses a news draft that has none. Posts written here carry no `🔗 Джерело` line,
+because there is no source to name. Factual references — the pricing page you checked
+before describing a free plan — are stored separately, each recording *what claim it
+supports*, and are never dressed up as a source article.

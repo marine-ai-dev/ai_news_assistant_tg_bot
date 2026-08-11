@@ -96,13 +96,23 @@ def source_line(source_label: str, source_url: str) -> str:
     return f"{SOURCE_PREFIX}: {source_label.strip()}\n{validate_url(source_url)}"
 
 
-def render_post(*, headline: str, body: str, source_label: str, source_url: str) -> str:
+def render_post(
+    *, headline: str, body: str, source_label: str = "", source_url: str = ""
+) -> str:
     """Assemble the text that would be sent.
 
     Deterministic and computed by Python, not supplied by the writer, so the stored
     content hash covers exactly the post a reviewer approves.
+
+    The attribution line appears only when there is something to attribute. News always
+    has a source and the writing import refuses a draft without one. A prompt or an
+    explainer was written here, and appending "🔗 Джерело:" to it would either name a
+    source that does not exist or point the reader at nothing.
     """
-    return "\n\n".join([headline.strip(), body.strip(), source_line(source_label, source_url)])
+    parts = [headline.strip(), body.strip()]
+    if source_url:
+        parts.append(source_line(source_label or "Джерело", source_url))
+    return "\n\n".join(parts)
 
 
 def source_label_of(source_attribution: str) -> str:
@@ -128,6 +138,8 @@ def source_url_of(version: DraftVersion) -> str:
 
 def render_version(version: DraftVersion) -> str:
     """The post text for a stored version.
+
+    Editorial-original content carries no source URL and therefore no source line.
 
     One function, deliberately. The review screen shows this, the content hash covers
     the fields it is built from, and the publisher sends it — if each derived the text

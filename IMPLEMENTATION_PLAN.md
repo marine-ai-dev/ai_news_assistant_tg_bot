@@ -1583,3 +1583,125 @@ Deferred, in rough order of usefulness:
 * **Multi-message deep dives** — splitting a long post deliberately rather than refusing
   it.
 * **Content strategy** — recurring formats, series, a mix target across categories.
+
+---
+
+## 28. Content model v2 (Phase 7.5)
+
+The MVP worked and was too narrow. Everything it produced was *AI news for people who
+already use AI tools* — which is a real audience, and a smaller one than this channel is
+for. Phase 7.5 widens the product without touching the safety spine.
+
+### 28.1 Two concepts that were quietly one
+
+`Category` had been carrying two jobs: what a post is about, and what kind of thing it
+is. They are separated now.
+
+* **`ContentType`** — `NEWS`, `PROMPT`, `EXPLAINER`. A format, not a subject.
+* **`AudienceTier`** — gains `NEWCOMER` below `BEGINNER`.
+
+`NEWCOMER` exists because "beginner" had drifted to mean *beginner developer*: someone
+who knows what an API is and simply has not used this tool. The actual reader this
+channel wants may have opened ChatGPT once and does not know what an agent is.
+
+Only three content types. `HOW_TO` and `TOOL_OF_THE_DAY` were left out deliberately —
+adding enum members is cheap, and adding formats nobody has written yet is how a content
+model becomes a CMS.
+
+### 28.2 The provenance problem, and why `drafts` was rebuilt
+
+`drafts.article_id` was `NOT NULL`. A prompt has no article, so supporting one meant
+either inventing an article row — fabricated provenance, the one thing this project must
+never do — or making the column nullable. SQLite cannot drop a `NOT NULL` in place, so
+migration 007 rebuilds three tables:
+
+* `drafts` — nullable `article_id`, plus `content_type` and `content_item_id`, plus a
+  CHECK that a draft has exactly **one** origin matching its type;
+* `draft_versions` and `evaluations` — `audience` CHECK widened to accept `NEWCOMER`.
+
+Rebuilding the table that holds a published post is not something to do casually. Four
+probes were run against copies of the live database before anything was written, and
+three of them failed: deferred foreign keys still trip on `DROP TABLE`, and
+`ALTER TABLE ... RENAME` rewrites other tables' `REFERENCES` clauses unless foreign keys
+are off *outside* the transaction. The procedure that works is create-new → copy →
+drop-old → rename, with `PRAGMA foreign_keys = OFF` around the transaction.
+
+The migration runner gained the smallest capability that makes this safe: a migration
+declares `-- requires: table-rebuild` on its own line, and the runner then manages the
+pragma and runs `PRAGMA foreign_key_check` afterwards, refusing to leave a database whose
+references stopped resolving. Declared rather than sniffed, so the dangerous mode is
+opted into in writing and visible when reading the file.
+
+Verified on the live database: every row in `draft_versions`, `review_decisions`,
+`publications`, `articles`, `evaluations` and `raw_items` byte-identical afterwards,
+append-only triggers restored, `foreign_key_check` clean, Telegram message id 2 still
+attached to its draft.
+
+### 28.3 `ContentItem` — what `Article` is to news
+
+Editorial-original substance lives in its own table. A prompt has no publisher, no
+publication date and no URL; a row in `articles` would make it indistinguishable from
+something that was reported.
+
+Type-specific fields are one validated JSON payload rather than fifteen columns that are
+half-NULL for every row. `topic`, `audience` and `title` are promoted to columns because
+those are what queries filter on.
+
+Optional `references` record *what claim each link supports* — "the pricing page, for the
+statement about free-plan limits". Deliberately not a source: editorial-original is not
+permission to invent, and it is also not permission to pretend somebody else reported it.
+
+### 28.4 One renderer, and posts with no source line
+
+`render_post` now omits the attribution line when there is no source URL. News keeps the
+requirement — `validate_edit` takes `require_source`, true for `NEWS`, so an edit cannot
+strip the link a reader needs to check a claim. An editorial post ends at its last
+paragraph, because "🔗 Джерело: —" would be a small lie.
+
+### 28.5 The jargon check is a warning, and stays one
+
+`content validate` flags terms a `NEWCOMER` may not know. A keyword blocklist would fail
+on exactly the posts it should approve: *"Notion — сервіс для нотаток — додав…"* contains
+the word Notion and is the correct way to write it. So the heuristic asks whether the
+term appears with an explanation somewhere in the post, and reports; it never rejects.
+
+It found a real problem on the first real batch: every prompt post used «промпт» in its
+headline and no post explained the word — for a `NEWCOMER`, that word is itself jargon.
+Fixed in the style guide, not only in the samples.
+
+It also revealed its own flaw. The first implementation checked only near a term's
+*first* occurrence, so a headline label explained in the opening line was flagged. Asking
+"is this explained anywhere in the post" is the better question, and that is what it asks
+now.
+
+### 28.6 Style guide v2
+
+`STYLE_VERSION` moved from "1" to "2" and the importer refuses batches written against
+"1". Text written under v1 assumed a reader who already used AI tools; the versions are
+genuinely not comparable, which is exactly what the number is for. Existing drafts keep
+`style_version = "1"` and nothing is reinterpreted.
+
+New sections: the audience scale, writing for `NEWCOMER`, the prompt and explainer
+formats, and — the one most likely to be got wrong — **never talk down**. «Навіть новачок
+зрозуміє» implies the reader was expected to struggle. Explain clearly and move on.
+
+### 28.7 Editorial mix: documentation, not a scheduler
+
+Roughly 40–50% `NEWCOMER`/`BEGINNER`, roughly 30/20/20/15/10/5 across news, product
+updates, prompts, explainers, viral and deeper science. Written down in the style guide
+and the rubric. **Nothing in the code enforces it**, and nothing should until the channel
+has a rhythm — a quota would push individual stories into audiences they do not belong
+in, which is precisely the failure the rubric warns against.
+
+### 28.8 What did not change
+
+The gate. A prompt and an explainer go through `Draft` → `DraftVersion` →
+`PENDING_REVIEW` → human approval → exact-version `PublishAuthorization` → typed
+`PUBLISH` → Telegram, identically to news. `publishing/` needed no change at all, which
+is the strongest evidence that the Phase 6/7 boundary was drawn in the right place: the
+gate cares about an approved version, never about what kind of post it is. Safety tests
+run every invariant per content type.
+
+One regression was found and fixed: `article_ids_with_drafts` did `UUID(row["article_id"])`
+over every draft, and the first editorial-original row turned it into `UUID(None)`. The
+kind of thing nullable columns do to code written before they were nullable.

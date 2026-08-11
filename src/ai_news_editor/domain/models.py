@@ -25,6 +25,8 @@ from ai_news_editor.domain.enums import (
     ArticleStatus,
     AudienceTier,
     Category,
+    ContentOrigin,
+    ContentType,
     DraftStatus,
     DuplicateReason,
     EditorialDecision,
@@ -32,6 +34,7 @@ from ai_news_editor.domain.enums import (
     FetchOutcome,
     PostFormat,
     PrefilterReason,
+    PromptTopic,
     PublicationStatus,
     ReviewAction,
     SourceKind,
@@ -249,21 +252,66 @@ class DraftVersion(ImmutableDomainModel):
 
 
 class Draft(DomainModel):
-    """Stable editorial identity for one article's publishable content.
+    """Stable editorial identity for one piece of publishable content.
 
     Holds the lifecycle and a pointer to the current version. The pointer is nullable
     only during creation, before the first version exists.
+
+    A draft has exactly one origin. News comes from an ``Article`` somebody else
+    published; a prompt or an explainer comes from a ``ContentItem`` this newsroom
+    wrote. Both end up here, in the same lifecycle, under the same approval gate —
+    writing something ourselves is not a reason to trust it more.
     """
 
     id: UUID = Field(default_factory=uuid4)
-    article_id: UUID
-    #: The editorial judgement that authorised writing. A draft always traces back to
-    #: the decision that said the story was worth covering.
+    content_type: ContentType = ContentType.NEWS
+    #: Set for NEWS. Null for editorial-original content, which has no article and must
+    #: never be given a fabricated one.
+    article_id: UUID | None = None
+    #: Set for PROMPT and EXPLAINER.
+    content_item_id: UUID | None = None
+    #: The editorial judgement that authorised writing. A news draft always traces back
+    #: to the decision that said the story was worth covering.
     evaluation_id: UUID | None = None
     status: DraftStatus = DraftStatus.DRAFTED
     current_version_id: UUID | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
     updated_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _exactly_one_origin(self) -> Self:
+        """Mirrors the database CHECK, so a bad draft cannot be built in memory either."""
+        if self.content_type is ContentType.NEWS:
+            if self.article_id is None:
+                raise ValueError("a NEWS draft needs the article it was written from")
+            if self.content_item_id is not None:
+                raise ValueError("a NEWS draft comes from an article, not a content item")
+        else:
+            if self.content_item_id is None:
+                raise ValueError(
+                    f"a {self.content_type.value} draft needs the content item it was "
+                    "written from"
+                )
+            if self.article_id is not None:
+                raise ValueError(
+                    f"a {self.content_type.value} draft is editorial-original; giving it "
+                    "an article would invent provenance it does not have"
+                )
+            if self.evaluation_id is not None:
+                raise ValueError(
+                    "editorial-original content has no article to evaluate, so it carries "
+                    "no evaluation"
+                )
+        return self
+
+    @property
+    def origin(self) -> ContentOrigin:
+        """Where this draft's substance came from."""
+        return (
+            ContentOrigin.SOURCED_ARTICLE
+            if self.content_type is ContentType.NEWS
+            else ContentOrigin.EDITORIAL_ORIGINAL
+        )
 
 
 class CommunitySignal(ImmutableDomainModel):
@@ -373,3 +421,118 @@ class Publication(ImmutableDomainModel):
             if self.published_at is None:
                 raise ValueError("a SUCCEEDED publication must record when it was sent")
         return self
+
+
+class ContentReference(ImmutableDomainModel):
+    """An optional factual reference behind editorial-original content.
+
+    Not a source in the news sense — nothing here was reported by anyone else. This is
+    "we checked the pricing page before saying what the free plan includes". Kept
+    separate from ``Article`` provenance precisely so the two can never be confused.
+    """
+
+    label: NonEmptyStr
+    url: NonEmptyStr
+    #: What this reference actually supports. A bare link proves nothing about which
+    #: claim it was consulted for.
+    supports: NonEmptyStr
+
+
+class PromptBody(ImmutableDomainModel):
+    """The structure every prompt post needs.
+
+    The three things a reader must get: what this is for, what to paste, and how to
+    make it theirs. A prompt without the third is a magic incantation, which is the
+    genre this channel is trying not to be.
+    """
+
+    what_you_can_do: NonEmptyStr
+    prompt_text: NonEmptyStr
+    #: At least one. "Change X to Y" is what turns a demo into something usable.
+    customization_tips: tuple[NonEmptyStr, ...] = Field(min_length=1)
+    #: Honest compatibility, or nothing. Claiming a prompt works everywhere is a claim
+    #: about tools we have not tested, and file upload or browsing is not universal.
+    works_with: str | None = None
+
+    @model_validator(mode="after")
+    def _the_prompt_must_be_substantial(self) -> Self:
+        """A one-word 'prompt' is not a prompt.
+
+        The floor is deliberately low — it catches empty and pathological content, not
+        terse-but-real prompts. Judging prompt quality is a reviewer's job.
+        """
+        if len(self.prompt_text.strip()) < 40:
+            raise ValueError(
+                "prompt_text is too short to be a usable prompt; it should give the AI "
+                "context, a goal and the shape of the answer wanted"
+            )
+        return self
+
+
+class ExplainerBody(ImmutableDomainModel):
+    """The structure every explainer post needs.
+
+    One concept. The temptation is to explain prompts, agents, tokens and context
+    windows in a single post, which produces something nobody finishes reading.
+    """
+
+    concept: NonEmptyStr
+    simple_explanation: NonEmptyStr
+    #: Something from the reader's own life, not another piece of technology.
+    real_life_example: NonEmptyStr
+    why_it_matters: NonEmptyStr
+    #: Optional: one thing to go and try. An explainer that ends in action beats one
+    #: that ends in a definition.
+    try_this: str | None = None
+
+
+class ContentItem(ImmutableDomainModel):
+    """Editorial-original source material for a prompt or an explainer.
+
+    What ``Article`` is to news, this is to content this newsroom wrote itself. It is
+    *not* a draft: it holds the editorial substance, and the Ukrainian post written from
+    it still goes through Draft, DraftVersion, human review and the approval gate like
+    everything else. Writing something ourselves earns no shortcut.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    content_type: ContentType
+    origin: ContentOrigin = ContentOrigin.EDITORIAL_ORIGINAL
+    audience: AudienceTier
+    #: Working title, for finding it again. The published headline is written later and
+    #: is the thing a human actually approves.
+    title: NonEmptyStr
+    topic: PromptTopic | None = None
+    body: PromptBody | ExplainerBody
+    references: tuple[ContentReference, ...] = ()
+    created_by: NonEmptyStr
+    created_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _body_matches_its_type(self) -> Self:
+        """The payload has to be the shape the content type promises."""
+        if self.content_type is ContentType.PROMPT:
+            if not isinstance(self.body, PromptBody):
+                raise ValueError("a PROMPT content item needs a prompt body")
+            if self.topic is None:
+                raise ValueError("a PROMPT content item needs a topic")
+        elif self.content_type is ContentType.EXPLAINER:
+            if not isinstance(self.body, ExplainerBody):
+                raise ValueError("an EXPLAINER content item needs an explainer body")
+            if self.topic is not None:
+                raise ValueError(
+                    "an EXPLAINER is described by its concept, not a prompt topic"
+                )
+        else:
+            raise ValueError(
+                f"{self.content_type.value} is sourced from an article, not written as a "
+                "content item"
+            )
+        return self
+
+    @property
+    def subject(self) -> str:
+        """What this item is about, for a review screen: a topic or a concept."""
+        if isinstance(self.body, ExplainerBody):
+            return self.body.concept
+        return self.topic.value if self.topic else self.title

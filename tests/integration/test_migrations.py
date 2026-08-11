@@ -437,7 +437,7 @@ class TestMigration005:
     def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh5.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6]
+        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6, 7]
 
     def test_upgrade_from_a_phase_4_database(self, tmp_path: Path) -> None:
         staged = tmp_path / "upto_004"
@@ -452,7 +452,7 @@ class TestMigration005:
         assert db.schema_version(conn) == 4
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [5, 6]
+        assert [m.version for m in applied] == [5, 6, 7]
 
     def test_new_draft_columns_exist(self, connection: sqlite3.Connection) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(draft_versions)")}
@@ -512,7 +512,7 @@ class TestMigration006:
         assert db.schema_version(conn) == 5
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [6]
+        assert [m.version for m in applied] == [6, 7]
 
     def test_history_is_untouched(self) -> None:
         """001-005 are never edited; 006 adds a table and nothing else."""

@@ -21,7 +21,13 @@ from rich.panel import Panel
 from rich.prompt import Prompt
 from rich.table import Table
 
-from ai_news_editor.domain.enums import Category, DraftStatus, ReviewAction
+from ai_news_editor.domain.enums import (
+    AudienceTier,
+    Category,
+    ContentType,
+    DraftStatus,
+    ReviewAction,
+)
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.publishing.gate import approve_draft, authorization_for_approved_draft
 from ai_news_editor.review.editing import EditorError, edit_text
@@ -148,16 +154,29 @@ def _render_item(
     meta.add_column("", style="dim", no_wrap=True)
     meta.add_column("")
     meta.add_row("Status", f"[yellow]{item.draft.status.value}[/yellow]")
+    meta.add_row("Type", _content_type_markup(item.draft.content_type))
     meta.add_row("Version", str(item.version.version_no))
     meta.add_row("Category", item.version.category.value)
-    meta.add_row("Audience", item.version.audience.value)
+    meta.add_row("Audience", _audience_markup(item.version.audience))
     if item.version.post_format:
         note = length_note(item)
         length = f"{len(item.rendered_post)} chars, {item.version.post_format.value}"
         meta.add_row("Format", length + (f"  [yellow]({note})[/yellow]" if note else ""))
     if item.score is not None:
         meta.add_row("Editorial score", f"{item.score:.1f}")
-    meta.add_row("Source", f"{item.article.source_id}\n{item.article.canonical_url}")
+    if item.article is not None:
+        meta.add_row("Source", f"{item.article.source_id}\n{item.article.canonical_url}")
+    elif item.content_item is not None:
+        # Editorial-original: say so plainly rather than leaving the row blank, which
+        # would read as a missing source rather than an absent one.
+        label = "Topic" if item.draft.content_type is ContentType.PROMPT else "Concept"
+        meta.add_row(label, item.subject or "-")
+        meta.add_row("Origin", "written by the channel (no external source)")
+        if item.content_item.references:
+            meta.add_row(
+                "Checked against",
+                "\n".join(f"{r.label} — {r.url}" for r in item.content_item.references),
+            )
     console.print(meta)
 
     console.print(
@@ -445,3 +464,20 @@ def _category(value: str | None) -> Category | None:
     except ValueError as exc:
         err_console.print(f"[bold red]Unknown category:[/bold red] {value}")
         raise typer.Exit(code=2) from exc
+
+
+def _content_type_markup(content_type: ContentType) -> str:
+    """Colour by format, so the kind of post registers before the text is read."""
+    colour = {
+        ContentType.NEWS: "cyan",
+        ContentType.PROMPT: "magenta",
+        ContentType.EXPLAINER: "green",
+    }[content_type]
+    return f"[{colour}]{content_type.value}[/{colour}]"
+
+
+def _audience_markup(audience: AudienceTier) -> str:
+    """NEWCOMER is highlighted: it is the level with the strictest jargon rules."""
+    if audience is AudienceTier.NEWCOMER:
+        return f"[bold]{audience.value}[/bold] [dim](assume no AI knowledge)[/dim]"
+    return audience.value
