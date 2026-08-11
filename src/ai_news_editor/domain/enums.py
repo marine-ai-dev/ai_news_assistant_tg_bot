@@ -247,6 +247,12 @@ class ContentType(StrEnum):
     PROMPT = "PROMPT"
     #: One concept explained without assuming technical background.
     EXPLAINER = "EXPLAINER"
+    #: Something a real person did with AI, retold: the workflow and the result are the
+    #: point, and a prompt may be one component or absent entirely. Distinct from
+    #: PROMPT, where the copyable prompt *is* the product.
+    TESTED_USE_CASE = "TESTED_USE_CASE"
+    #: Something to download or keep: a checklist, a cheat sheet, a curated collection.
+    RESOURCE = "RESOURCE"
 
 
 class ContentOrigin(StrEnum):
@@ -335,3 +341,110 @@ class PromptRepresentation(StrEnum):
     #: The source described a workflow rather than quoting a prompt; this is our
     #: reconstruction of it, and it is labelled as such rather than passed off as theirs.
     WORKFLOW_RECONSTRUCTION = "WORKFLOW_RECONSTRUCTION"
+
+
+class UseCaseTheme(StrEnum):
+    """What area of life a tested use case belongs to.
+
+    Discovery directions, not a taxonomy to fill. An empty theme is a theme nobody has
+    found a real example for yet, which is the correct state for it to be in.
+    """
+
+    PERSONAL_ASSISTANT = "PERSONAL_ASSISTANT"
+    ORGANIZATION = "ORGANIZATION"
+    PLANNING = "PLANNING"
+    LEARNING = "LEARNING"
+    LANGUAGE_LEARNING = "LANGUAGE_LEARNING"
+    DOCUMENT_ANALYSIS = "DOCUMENT_ANALYSIS"
+    EMAIL_AND_MESSAGES = "EMAIL_AND_MESSAGES"
+    TRAVEL = "TRAVEL"
+    SHOPPING_RESEARCH = "SHOPPING_RESEARCH"
+    CAREER = "CAREER"
+    INTERVIEWS = "INTERVIEWS"
+    CV = "CV"
+    STUDY = "STUDY"
+    NOTES = "NOTES"
+    CREATIVE = "CREATIVE"
+    IMAGE_WORKFLOW = "IMAGE_WORKFLOW"
+    PRODUCTIVITY = "PRODUCTIVITY"
+    EVERYDAY_AI = "EVERYDAY_AI"
+
+
+class EvidenceKind(StrEnum):
+    """What kind of act produced the evidence.
+
+    A different axis from :class:`SourceTier`, which says *who is vouching*. This says
+    *what happened*. A vendor demo and a Reddit post can both be honest evidence; they
+    are not the same kind of claim, and the writing has to reflect which one it is.
+    """
+
+    #: The vendor demonstrated their own product.
+    OFFICIAL_TEST = "OFFICIAL_TEST"
+    #: A publication or creator showed the work.
+    THIRD_PARTY_DEMO = "THIRD_PARTY_DEMO"
+    #: Several people in a community reported the same thing.
+    COMMUNITY_TESTED = "COMMUNITY_TESTED"
+    #: The channel owner ran it herself and has the result.
+    OWNER_TESTED = "OWNER_TESTED"
+    #: One person said this worked for them. Anecdote — useful, and never upgraded into
+    #: a general claim by the writing.
+    USER_REPORTED_LIFEHACK = "USER_REPORTED_LIFEHACK"
+
+
+class PromptPlacement(StrEnum):
+    """Where the prompt lives in the published bundle."""
+
+    #: Short enough to sit in the post and be copied from it.
+    INLINE = "INLINE"
+    #: Long enough that it would swamp the post; goes in the first comment, and the post
+    #: says so. The comment is part of what a human approves, not written afterwards.
+    COMMENT = "COMMENT"
+    #: The post has no prompt — common for a use case where the workflow is the point.
+    NONE = "NONE"
+
+
+class MediaRole(StrEnum):
+    """What a piece of media is doing in the post."""
+
+    RESULT_IMAGE = "RESULT_IMAGE"
+    BEFORE_IMAGE = "BEFORE_IMAGE"
+    AFTER_IMAGE = "AFTER_IMAGE"
+    SCREENSHOT = "SCREENSHOT"
+    SOURCE_SCREENSHOT = "SOURCE_SCREENSHOT"
+    INFOGRAPHIC = "INFOGRAPHIC"
+    PDF = "PDF"
+    OTHER = "OTHER"
+
+
+class MediaOrigin(StrEnum):
+    """Where a piece of media came from. Never inferred, because reusing somebody
+    else's image without knowing it is theirs is how a channel gets a complaint."""
+
+    #: Belongs to the source. Recorded by URL; not downloaded and republished.
+    SOURCE_MEDIA = "SOURCE_MEDIA"
+    #: The owner generated it with an AI tool, and the tool is recorded.
+    OWNER_GENERATED = "OWNER_GENERATED"
+    #: The owner's own screenshot of their own screen.
+    OWNER_SCREENSHOT = "OWNER_SCREENSHOT"
+    #: Made for the channel — a diagram, a cover.
+    EDITORIAL_ASSET = "EDITORIAL_ASSET"
+
+
+class ResourceType(StrEnum):
+    """What kind of thing a RESOURCE post gives the reader."""
+
+    PDF_COLLECTION = "PDF_COLLECTION"
+    CHECKLIST = "CHECKLIST"
+    CHEAT_SHEET = "CHEAT_SHEET"
+    CURATED_LIST = "CURATED_LIST"
+    MINI_GUIDE = "MINI_GUIDE"
+    PROMPT_COLLECTION = "PROMPT_COLLECTION"
+    TOOL_COLLECTION = "TOOL_COLLECTION"
+
+
+#: Content types whose posts must rest on evidence somebody published or the owner
+#: produced. An explainer explains and a resource curates; neither is a claim that a
+#: workflow worked, so neither carries this requirement.
+EVIDENCE_REQUIRED_TYPES: frozenset[ContentType] = frozenset(
+    {ContentType.PROMPT, ContentType.TESTED_USE_CASE}
+)

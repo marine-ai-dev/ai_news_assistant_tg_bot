@@ -20,9 +20,10 @@ from ai_news_editor.domain.enums import (
     ContentType,
     DraftStatus,
     PostFormat,
+    PromptPlacement,
 )
 from ai_news_editor.domain.errors import EntityNotFoundError, RepositoryError
-from ai_news_editor.domain.models import Draft, DraftVersion
+from ai_news_editor.domain.models import Draft, DraftVersion, MediaAsset, ResourceSpec
 from ai_news_editor.domain.transitions import assert_draft_transition
 from ai_news_editor.storage.db import transaction
 
@@ -53,7 +54,11 @@ def _version_to_domain(row: sqlite3.Row) -> DraftVersion:
     data = dict(row)
     data["hashtags"] = tuple(json.loads(data.pop("hashtags_json")))
     data["writer_notes"] = tuple(json.loads(data.pop("writer_notes_json")))
-    # content_hash is computed from the content, never read back as an input field.
+    data["media"] = tuple(json.loads(data.pop("media_json") or "[]"))
+    resource = data.pop("resource_json", None)
+    data["resource"] = json.loads(resource) if resource else None
+    # content_hash is computed from the content, never read back as an input field. A
+    # stored hash that disagreed with the content would be silently trusted otherwise.
     data.pop("content_hash", None)
     return DraftVersion.model_validate(data)
 
@@ -84,6 +89,11 @@ class DraftRepository:
         post_format: PostFormat | None = None,
         style_version: str | None = None,
         writer_notes: Sequence[str] = (),
+        prompt_placement: PromptPlacement = PromptPlacement.NONE,
+        comment_text: str | None = None,
+        media: Sequence[MediaAsset] = (),
+        resource: ResourceSpec | None = None,
+        footer_text: str | None = None,
     ) -> tuple[Draft, DraftVersion]:
         """Create a draft together with its first version, atomically.
 
@@ -111,6 +121,11 @@ class DraftRepository:
             post_format=post_format,
             style_version=style_version,
             writer_notes=tuple(writer_notes),
+            prompt_placement=prompt_placement,
+            comment_text=comment_text,
+            media=tuple(media),
+            resource=resource,
+            footer_text=footer_text,
             created_by=created_by,
         )
 
@@ -153,6 +168,11 @@ class DraftRepository:
         post_format: PostFormat | None = None,
         style_version: str | None = None,
         writer_notes: Sequence[str] = (),
+        prompt_placement: PromptPlacement = PromptPlacement.NONE,
+        comment_text: str | None = None,
+        media: Sequence[MediaAsset] = (),
+        resource: ResourceSpec | None = None,
+        footer_text: str | None = None,
     ) -> tuple[Draft, DraftVersion]:
         """Append a new immutable version and point the draft at it.
 
@@ -179,6 +199,11 @@ class DraftRepository:
             post_format=post_format,
             style_version=style_version,
             writer_notes=tuple(writer_notes),
+            prompt_placement=prompt_placement,
+            comment_text=comment_text,
+            media=tuple(media),
+            resource=resource,
+            footer_text=footer_text,
             created_by=created_by,
         )
 
@@ -208,8 +233,10 @@ class DraftRepository:
             INSERT INTO draft_versions (id, draft_id, version_no, title, body, hashtags_json,
                                         category, audience, source_attribution, source_url,
                                         post_format, style_version, writer_notes_json,
+                                        prompt_placement, comment_text, media_json,
+                                        resource_json, footer_text,
                                         content_hash, created_by, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(version.id),
@@ -225,6 +252,17 @@ class DraftRepository:
                 version.post_format.value if version.post_format else None,
                 version.style_version,
                 json.dumps(list(version.writer_notes), ensure_ascii=False),
+                version.prompt_placement.value,
+                version.comment_text,
+                json.dumps(
+                    [a.model_dump(mode="json") for a in version.media], ensure_ascii=False
+                ),
+                (
+                    json.dumps(version.resource.model_dump(mode="json"), ensure_ascii=False)
+                    if version.resource
+                    else None
+                ),
+                version.footer_text,
                 version.content_hash,
                 version.created_by,
                 to_iso(version.created_at),

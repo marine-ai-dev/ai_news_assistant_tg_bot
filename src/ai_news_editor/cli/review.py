@@ -195,6 +195,24 @@ def _render_item(
                 "Checked against",
                 "\n".join(f"{r.label} — {r.url}" for r in item.content_item.references),
             )
+    version = item.version
+    if version.comment_text:
+        meta.add_row("Prompt placement", version.prompt_placement.value)
+    if version.media:
+        meta.add_row(
+            "Media",
+            "\n".join(
+                f"{a.role.value} · {a.origin.value} — {a.description}" for a in version.media
+            ),
+        )
+    if version.resource is not None:
+        meta.add_row(
+            "Resource",
+            f"{version.resource.resource_type.value} — {version.resource.title}",
+        )
+    if item.content_item is not None and item.content_item.series_label:
+        meta.add_row("Series", item.content_item.series_label)
+
     console.print(meta)
 
     console.print(
@@ -205,6 +223,17 @@ def _render_item(
             border_style="white",
         )
     )
+
+    if version.comment_text:
+        # Shown in full, not summarised: approving this post approves the comment too.
+        console.print(
+            Panel(
+                version.comment_text,
+                title="COMMENT TO PUBLISH WITH THE POST",
+                title_align="left",
+                border_style="cyan",
+            )
+        )
 
     if item.version.writer_notes:
         console.print("[bold]Writer notes[/bold] [dim](internal, never published)[/dim]")
@@ -484,13 +513,21 @@ def _category(value: str | None) -> Category | None:
         raise typer.Exit(code=2) from exc
 
 
+#: One colour per content type. Exhaustive by test, because a type added without an
+#: entry here crashes the review screen — which is exactly how Phase 8.2's two new types
+#: were found.
+_TYPE_COLOURS: dict[ContentType, str] = {
+    ContentType.NEWS: "cyan",
+    ContentType.PROMPT: "magenta",
+    ContentType.EXPLAINER: "green",
+    ContentType.TESTED_USE_CASE: "yellow",
+    ContentType.RESOURCE: "blue",
+}
+
+
 def _content_type_markup(content_type: ContentType) -> str:
     """Colour by format, so the kind of post registers before the text is read."""
-    colour = {
-        ContentType.NEWS: "cyan",
-        ContentType.PROMPT: "magenta",
-        ContentType.EXPLAINER: "green",
-    }[content_type]
+    colour = _TYPE_COLOURS[content_type]
     return f"[{colour}]{content_type.value}[/{colour}]"
 
 

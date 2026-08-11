@@ -51,7 +51,13 @@ WRITING_SCHEMA_VERSION = "1"
 #: prompt and explainer formats. Text written under v1 assumed a reader who already
 #: used AI tools, so the versions are genuinely not comparable — which is exactly what
 #: this number is for.
-STYLE_VERSION = "2"
+#:
+#: v3 (Phase 8.2): the channel's own visual style, written down — an emoji leading each
+#: semantic block, the forwarding call-to-action, prompts that may live in the first
+#: comment, and the language for retelling somebody else's experience without upgrading
+#: it into a general claim. A v2 post is not wrong; it just does not look like this
+#: channel.
+STYLE_VERSION = "3"
 
 #: How much source text a writer receives. Enough to write accurately without shipping
 #: whole article bodies into a batch.

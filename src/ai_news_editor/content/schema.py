@@ -27,10 +27,16 @@ from ai_news_editor.domain.enums import (
     AudienceTier,
     Category,
     ContentType,
+    EvidenceKind,
+    MediaOrigin,
+    MediaRole,
     PostFormat,
+    PromptPlacement,
     PromptRepresentation,
     PromptTopic,
+    ResourceType,
     SourceTier,
+    UseCaseTheme,
 )
 from ai_news_editor.writing.format import (
     MAX_HEADLINE_CHARS,
@@ -104,6 +110,10 @@ class SubmittedEvidence(StrictModel):
     source_url: NonEmpty
     source_title: NonEmpty
     source_tier: SourceTier
+    #: Where it was found, for social sources: Reddit, Threads, X, YouTube, a blog.
+    source_platform: str | None = None
+    #: The handle or byline, as the platform shows it.
+    source_author: str | None = None
     tested_by: NonEmpty
     tool_used: NonEmpty
     model_version: str | None = None
@@ -175,6 +185,90 @@ class SubmittedPrompt(StrictModel):
         return self
 
 
+class SubmittedMedia(StrictModel):
+    """An image, screenshot or file that belongs to a post."""
+
+    role: MediaRole
+    origin: MediaOrigin
+    reference: NonEmpty
+    description: NonEmpty
+    tool_used: str | None = None
+    model_version: str | None = None
+    source_url: str | None = None
+
+
+class SubmittedResource(StrictModel):
+    """A downloadable or curated thing a RESOURCE post is built around."""
+
+    resource_type: ResourceType
+    title: NonEmpty
+    description: NonEmpty
+    version: str | None = None
+    asset: SubmittedMedia | None = None
+
+
+class SubmittedUseCase(StrictModel):
+    """Something a real person did with AI, retold.
+
+    Distinct from a prompt: the value is the workflow and the result, and the prompt may
+    be one component or absent. The evidence requirement is the same, because "somebody
+    did this" is exactly as much of a claim as "this prompt works".
+    """
+
+    content_type: Literal[ContentType.TESTED_USE_CASE] = ContentType.TESTED_USE_CASE
+    title: NonEmpty
+    audience: AudienceTier
+    theme: UseCaseTheme
+    what_the_person_did: NonEmpty
+    reported_benefit: NonEmpty
+    how_to_try: list[NonEmpty] = Field(min_length=1, max_length=6)
+    prompt_text: str | None = None
+    evidence: SubmittedEvidence
+    evidence_kind: EvidenceKind
+    prompt_placement: PromptPlacement = PromptPlacement.NONE
+    comment_text: str | None = None
+    media: list[SubmittedMedia] = Field(default_factory=list, max_length=4)
+    series_name: str | None = None
+    series_order: int | None = Field(default=None, ge=1)
+    references: list[SubmittedReference] = Field(default_factory=list)
+    post: SubmittedPost
+
+    @model_validator(mode="after")
+    def _the_bundle_is_coherent(self) -> Self:
+        if self.prompt_placement is PromptPlacement.COMMENT and not (
+            self.comment_text and self.comment_text.strip()
+        ):
+            raise ValueError(
+                "prompt_placement is COMMENT but no comment_text was supplied; the post "
+                "would promise a prompt that is not there"
+            )
+        if self.prompt_placement is PromptPlacement.INLINE and not self.prompt_text:
+            raise ValueError("prompt_placement is INLINE but there is no prompt")
+        if self.evidence.source_url not in self.post.body:
+            raise ValueError(
+                "the post body does not contain the source link; a retold use case has "
+                "to show whose it was"
+            )
+        if (self.series_order is None) != (self.series_name is None):
+            raise ValueError("a series needs both a name and a position, or neither")
+        return self
+
+
+class SubmittedResourcePost(StrictModel):
+    """A curated or downloadable resource."""
+
+    content_type: Literal[ContentType.RESOURCE] = ContentType.RESOURCE
+    title: NonEmpty
+    audience: AudienceTier
+    resource: SubmittedResource
+    what_it_gives_you: NonEmpty
+    how_to_use: list[NonEmpty] = Field(min_length=1, max_length=6)
+    series_name: str | None = None
+    series_order: int | None = Field(default=None, ge=1)
+    references: list[SubmittedReference] = Field(default_factory=list)
+    post: SubmittedPost
+
+
 class SubmittedExplainer(StrictModel):
     """An explainer item: one concept, plus the post written around it."""
 
@@ -191,7 +285,8 @@ class SubmittedExplainer(StrictModel):
 
 
 SubmittedItem = Annotated[
-    SubmittedPrompt | SubmittedExplainer, Field(discriminator="content_type")
+    SubmittedPrompt | SubmittedExplainer | SubmittedUseCase | SubmittedResourcePost,
+    Field(discriminator="content_type"),
 ]
 
 
@@ -231,7 +326,11 @@ __all__ = [
     "SubmittedEvidence",
     "SubmittedExplainer",
     "SubmittedItem",
+    "SubmittedMedia",
     "SubmittedPost",
     "SubmittedPrompt",
     "SubmittedReference",
+    "SubmittedResource",
+    "SubmittedResourcePost",
+    "SubmittedUseCase",
 ]

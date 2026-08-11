@@ -15,7 +15,12 @@ from ai_news_editor.bot.callbacks import (
     encode,
 )
 from ai_news_editor.bot.session import EDIT_TIMEOUT_SECONDS, Session
-from ai_news_editor.domain.enums import AudienceTier, ContentType, DraftStatus
+from ai_news_editor.domain.enums import (
+    AudienceTier,
+    ContentType,
+    DraftStatus,
+    PromptPlacement,
+)
 
 DRAFT_ID = UUID("ff6e1a19-f7bf-48a3-b687-c213364b7e07")
 
@@ -155,6 +160,10 @@ class TestCardDetail:
             category=SimpleNamespace(value="EVERYDAY_AI"),
             post_format=overrides.get("post_format"),
             writer_notes=overrides.get("writer_notes", ()),
+            comment_text=overrides.get("comment_text"),
+            prompt_placement=overrides.get("prompt_placement", PromptPlacement.NONE),
+            media=overrides.get("media", ()),
+            resource=overrides.get("resource"),
         )
         draft = SimpleNamespace(
             id=DRAFT_ID, content_type=overrides.get("content_type", ContentType.NEWS)
@@ -198,6 +207,7 @@ class TestCardDetail:
             content_item=SimpleNamespace(
                 evidence=None,
                 evidence_status=None,
+                series_label=None,
                 references=(
                     SimpleNamespace(label="OpenAI Help", url="https://help.openai.com/x"),
                 ),
@@ -219,3 +229,22 @@ class TestCardDetail:
 
     def test_history_lists_what_it_is_given(self) -> None:
         assert "версія 1" in render.history(["версія 1 — створено"])
+
+
+class TestEveryContentTypeIsRenderable:
+    """A new content type must not be able to crash a review screen.
+
+    Both review surfaces map content type to a label or a colour. Phase 8.2 added two
+    types and the terminal map was missed — the screen raised a KeyError the first time
+    a use case reached it. These two tests make the maps exhaustive by construction.
+    """
+
+    @pytest.mark.parametrize("content_type", list(ContentType))
+    def test_the_bot_has_a_label(self, content_type: ContentType) -> None:
+        assert render.TYPE_LABELS[content_type]
+
+    @pytest.mark.parametrize("content_type", list(ContentType))
+    def test_the_terminal_has_a_colour(self, content_type: ContentType) -> None:
+        from ai_news_editor.cli.review import _TYPE_COLOURS
+
+        assert _TYPE_COLOURS[content_type]

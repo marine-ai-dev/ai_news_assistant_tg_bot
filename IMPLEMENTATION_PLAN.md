@@ -1890,3 +1890,90 @@ News is untouched. Explainers stay editorial-original: they explain rather than 
 and requiring a tested demonstration for "what is a prompt?" would be a category error.
 The review bot gained evidence fields on its card and nothing else — no rebuild of
 polling, authorization, callbacks, editing or the approval UX.
+
+---
+
+## 32. Phase 8.2 — editorial DNA and the rich post bundle
+
+The channel existed before the automation, with a look: an emoji leading each block,
+prompts sometimes in the first comment, real result images on practical posts,
+downloadable collections, and an invite line at the end. None of that was modelled. A
+system that produced correct posts in the wrong shape would have replaced the channel
+with a generic AI news feed — slowly enough that nobody would have pointed at the moment
+it happened.
+
+### 32.1 Five formats, structurally
+
+`ContentType` gains `TESTED_USE_CASE` and `RESOURCE`. Both are columns, not free-text
+categories, because "is this a retold user story?" is a question the review screen, the
+eligibility rules and eventually the scheduler all have to answer.
+
+`TESTED_USE_CASE` is not `PROMPT`. A prompt post gives the reader something to copy; a
+use case gives them something to recognise, and the prompt may be a detail or absent.
+The **lifehack** is not a sixth type but a use case whose evidence is one person's
+report — `evidence_kind = USER_REPORTED_LIFEHACK`, on the axis of *what kind of act
+produced the evidence*, separate from `source_tier`'s *who is vouching*.
+
+### 32.2 The bundle, and what the approval covers
+
+`DraftVersion` gains `prompt_placement`, `comment_text`, `media`, `resource` and
+`footer_text`, and the content hash covers all of them. The failure this prevents is
+specific: approve a post, then change the comment, then publish both. Every one of those
+fields is a way for what ships to differ from what a human read.
+
+Media is hashed by **identity** — role, origin, reference — and not by anything about
+the file on disk. Hashing a modification time would expire an approval because somebody
+touched a file, which is a worse failure than the one it would prevent.
+
+### 32.3 Backward compatibility that is structural, not promised
+
+The hash payload omits the bundle key **entirely** when the bundle is empty. A text-only
+version therefore hashes byte-identically to how it hashed before any of this existed,
+which is what keeps the already-published post's approval verifying. Proven directly: a
+test recomputes the pre-8.2 payload by hand and compares, and the live migration was
+checked by comparing all fourteen stored hashes before and after.
+
+### 32.4 The footer
+
+Configuration, not prose. The handle comes from settings, is checked before the draft
+exists, and is frozen onto the version — a footer rebuilt at send time could differ from
+the one that was approved. The leading emoji varies within a small set, because four
+hundred identical closing lines is what a template looks like.
+
+It sits apart from the source line on purpose. One says where the story came from, the
+other says where the reader is.
+
+### 32.5 Four migrations, and a lesson that cost two of them
+
+009 adds the bundle columns. 010 and 011 exist because **adding a member to a Python
+enum widens nothing in SQLite**: `content_items` and `drafts` both carry CHECK
+constraints that spell the content types out, and both had to be rebuilt. The first
+import failed on one, and the second failed on the other immediately after.
+
+The lesson generalises and is worth stating: after any change to a controlled
+vocabulary, grep the schema for constraints that name its values. `drafts` alone has
+three, two of them the origin rules that stop a prompt borrowing an article's
+provenance — exactly the constraints that must not be quietly dropped while widening
+something else. Migration 011 restates them in full rather than relaxing them.
+
+A third instance of the same class showed up in the terminal review screen, which maps
+content type to a colour and raised a `KeyError` the first time a use case reached it.
+Both review surfaces now have exhaustive maps, asserted per enum member.
+
+### 32.6 What this phase does not do
+
+**No rich publication.** The bundle is modelled, stored, hashed and reviewed; sending
+media, comments and files to Telegram is Phase 8.3. A comment is approved today and not
+yet sent, and the README says so rather than leaving it to be discovered.
+
+No scheduler, no queue, no calendar. No cross-posting. No monetisation.
+
+### 32.7 Research reality
+
+Reddit — the platform the brief names first for lifehack discovery — **is blocked to this
+crawler**. Searches for first-person accounts returned mostly SEO comparison pages, which
+the Phase-8.1 quality filter already rejects. One genuinely strong demonstration was
+found and used; the second use case is a vendor demonstration, labelled `OFFICIAL_TEST`
+rather than dressed up as a user story.
+
+That is one real lifehack, not two. Recorded as a shortfall rather than padded.

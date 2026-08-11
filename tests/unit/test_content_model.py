@@ -86,9 +86,14 @@ class TestContentTypes:
         with pytest.raises(ValueError):
             ContentType("HOW_TO")
 
-    def test_there_are_exactly_three(self) -> None:
-        """Phase 7.5 stays focused; HOW_TO and TOOL_OF_THE_DAY are later, if ever."""
-        assert len(list(ContentType)) == 3
+    @pytest.mark.parametrize("name", ["TESTED_USE_CASE", "RESOURCE"])
+    def test_the_phase_82_types_exist(self, name: str) -> None:
+        assert ContentType(name).value == name
+
+    def test_the_vocabulary_stays_small(self) -> None:
+        """Five formats the channel actually publishes. Adding one is an editorial
+        decision, not a convenience."""
+        assert len(list(ContentType)) == 5
 
 
 class TestPromptStructure:

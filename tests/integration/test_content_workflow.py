@@ -401,3 +401,136 @@ class TestBadInput:
         result = runner.invoke(app, ["content", "validate", str(path), "--show"])
         assert result.exit_code == 0
         assert "Що таке промпт" in output_of(result)
+
+
+class TestUseCaseAndResourceBatches:
+    """The new formats through the batch contract."""
+
+    def _use_case(self, **overrides: Any) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "content_type": "TESTED_USE_CASE",
+            "title": "Нотатки у план дня",
+            "audience": "NEWCOMER",
+            "theme": "ORGANIZATION",
+            "what_the_person_did": "склав план дня з хаотичних нотаток",
+            "reported_benefit": "перестав губити дрібні задачі",
+            "how_to_try": ["почніть з одного дня"],
+            "prompt_text": "Ось мої нотатки. Зроби з них план на день.",
+            "prompt_placement": "INLINE",
+            "evidence_kind": "USER_REPORTED_LIFEHACK",
+            "evidence": {
+                "source_url": SOURCE_URL,
+                "source_title": "Example",
+                "source_tier": "COMMUNITY_REPORT",
+                "source_platform": "Reddit",
+                "source_author": "u/example",
+                "tested_by": "користувач Reddit",
+                "tool_used": "ChatGPT",
+                "what_was_tested": "перетворити нотатки на план",
+                "observed_result": "автор пише, що план вийшов придатним",
+            },
+            "media": [],
+            "references": [],
+            "post": {
+                "headline": "🛠 Нотатки у план дня",
+                "body": (
+                    "🛠 Ось мої нотатки. Зроби з них план на день. Далі трохи тексту, щоб "
+                    "допис пройшов мінімальну довжину і виглядав як справжній. " * 2
+                    + f"\n🔗 {SOURCE_URL}"
+                ),
+                "category": "EVERYDAY_AI",
+                "post_format": "STANDARD",
+            },
+        }
+        item.update(overrides)
+        return item
+
+    def _resource(self, **overrides: Any) -> dict[str, Any]:
+        item: dict[str, Any] = {
+            "content_type": "RESOURCE",
+            "title": "Збірка промптів",
+            "audience": "BEGINNER",
+            "resource": {
+                "resource_type": "PDF_COLLECTION",
+                "title": "Збірка перевірених промптів",
+                "description": "Промпти з каналу в одному файлі",
+                "version": "2026-08",
+            },
+            "what_it_gives_you": "готові промпти, які вже комусь допомогли",
+            "how_to_use": ["збережіть і повертайтесь, коли треба"],
+            "references": [],
+            "post": {
+                "headline": "📚 Збірка промптів",
+                "body": (
+                    "📚 Зібрала промпти з каналу в один файл. Далі трохи тексту, щоб "
+                    "допис пройшов мінімальну довжину і виглядав як справжній. " * 2
+                ),
+                "category": "USEFUL_TOOL",
+                "post_format": "STANDARD",
+            },
+        }
+        item.update(overrides)
+        return item
+
+    def test_a_use_case_batch_loads(self, tmp_path: Path) -> None:
+        batch = load_batch(batch_file(tmp_path, self._use_case()))
+        assert batch.items[0].content_type is ContentType.TESTED_USE_CASE
+
+    def test_a_use_case_without_its_source_link_is_refused(self, tmp_path: Path) -> None:
+        item = self._use_case()
+        item["post"] = {**item["post"], "body": item["post"]["body"].replace(SOURCE_URL, "")}
+        with pytest.raises(ContentImportError, match="source link"):
+            load_batch(batch_file(tmp_path, item))
+
+    def test_a_comment_placement_without_a_comment_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ContentImportError, match="no comment_text"):
+            load_batch(batch_file(tmp_path, self._use_case(prompt_placement="COMMENT")))
+
+    def test_an_inline_placement_without_a_prompt_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ContentImportError, match="no prompt"):
+            load_batch(
+                batch_file(tmp_path, self._use_case(prompt_placement="INLINE", prompt_text=None))
+            )
+
+    def test_a_half_declared_series_is_refused(self, tmp_path: Path) -> None:
+        with pytest.raises(ContentImportError, match="name and a position"):
+            load_batch(batch_file(tmp_path, self._use_case(series_name="Марафон")))
+
+    def test_importing_a_use_case_stores_its_theme_and_evidence_kind(
+        self, connection: sqlite3.Connection, tmp_path: Path
+    ) -> None:
+        import_batch(connection, batch_file(tmp_path, self._use_case()))
+        item = ContentItemRepository(connection).list_by_type(ContentType.TESTED_USE_CASE)[0]
+
+        assert item.use_case_theme is not None
+        assert item.evidence_kind is not None
+        assert item.evidence is not None
+        assert item.evidence.source_platform == "Reddit"
+
+    def test_importing_a_use_case_freezes_the_footer_onto_the_version(
+        self, connection: sqlite3.Connection, tmp_path: Path
+    ) -> None:
+        outcome = import_batch(connection, batch_file(tmp_path, self._use_case()))
+        version = DraftRepository(connection).current_version(outcome.created[0][0])
+
+        assert version.footer_text is not None
+        assert "@learn_ai_easy" in version.footer_text
+
+    def test_importing_a_resource_stores_its_spec(
+        self, connection: sqlite3.Connection, tmp_path: Path
+    ) -> None:
+        outcome = import_batch(connection, batch_file(tmp_path, self._resource()))
+        version = DraftRepository(connection).current_version(outcome.created[0][0])
+
+        assert version.resource is not None
+        assert version.resource.title == "Збірка перевірених промптів"
+        assert version.resource.version == "2026-08"
+
+    def test_a_use_case_draft_still_awaits_review(
+        self, connection: sqlite3.Connection, tmp_path: Path
+    ) -> None:
+        outcome = import_batch(connection, batch_file(tmp_path, self._use_case()))
+        assert (
+            DraftRepository(connection).get(outcome.created[0][0]).status
+            is DraftStatus.PENDING_REVIEW
+        )

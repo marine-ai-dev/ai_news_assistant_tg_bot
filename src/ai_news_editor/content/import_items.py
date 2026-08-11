@@ -25,26 +25,38 @@ from pydantic import ValidationError
 from ai_news_editor.content.jargon import unexplained
 from ai_news_editor.content.schema import (
     ContentBatch,
+    SubmittedEvidence,
     SubmittedExplainer,
     SubmittedItem,
+    SubmittedMedia,
     SubmittedPrompt,
+    SubmittedResource,
+    SubmittedResourcePost,
+    SubmittedUseCase,
 )
 from ai_news_editor.domain.enums import (
     NON_TECHNICAL_AUDIENCES,
     ContentType,
     DraftStatus,
     EvidenceStatus,
+    PromptPlacement,
 )
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.domain.models import (
     ContentItem,
     ContentReference,
     ExplainerBody,
+    MediaAsset,
     PromptBody,
     PromptEvidence,
+    ResourceBody,
+    ResourceSpec,
+    UseCaseBody,
 )
 from ai_news_editor.observability.logging import get_logger
+from ai_news_editor.settings import get_settings
 from ai_news_editor.storage.repositories import ContentItemRepository, DraftRepository
+from ai_news_editor.writing.footer import check_footer, render_footer
 from ai_news_editor.writing.format import render_post
 from ai_news_editor.writing.schema import STYLE_VERSION
 
@@ -130,6 +142,20 @@ def import_batch(connection: sqlite3.Connection, path: Path) -> ImportOutcome:
     items = ContentItemRepository(connection)
     drafts = DraftRepository(connection)
 
+    settings = get_settings()
+    # Chosen once, here, and frozen onto the version. A footer rebuilt at send time
+    # could differ from the one a human approved, and its whole job is to be the line
+    # somebody sees on a forwarded post.
+    footer = (
+        render_footer(
+            settings.channel_handle, text=settings.channel_footer_text
+        )
+        if settings.channel_footer_enabled
+        else None
+    )
+    if footer is not None:
+        check_footer(footer, settings.channel_handle)
+
     outcome = ImportOutcome(warnings=review_notes(batch))
 
     for submitted in batch.items:
@@ -152,6 +178,15 @@ def import_batch(connection: sqlite3.Connection, path: Path) -> ImportOutcome:
             style_version=batch.style_version,
             hashtags=submitted.post.hashtags,
             writer_notes=submitted.post.writer_notes,
+            prompt_placement=getattr(submitted, "prompt_placement", PromptPlacement.NONE),
+            comment_text=getattr(submitted, "comment_text", None),
+            media=[_to_media(m) for m in getattr(submitted, "media", [])],
+            resource=(
+                _to_resource(submitted.resource)
+                if isinstance(submitted, SubmittedResourcePost)
+                else None
+            ),
+            footer_text=footer,
             created_by=f"claude-code:content_v{STYLE_VERSION}",
         )
         # Straight to review, like every other draft. There is no other option here
@@ -189,23 +224,47 @@ def _to_content_item(submitted: SubmittedItem, *, author: str) -> ContentItem:
                 works_with=submitted.works_with,
                 representation=submitted.representation,
             ),
-            evidence=PromptEvidence(
-                source_url=evidence.source_url,
-                source_title=evidence.source_title,
-                source_tier=evidence.source_tier,
-                tested_by=evidence.tested_by,
-                tool_used=evidence.tool_used,
-                model_version=evidence.model_version,
-                what_was_tested=evidence.what_was_tested,
-                observed_result=evidence.observed_result,
-                limitations=tuple(evidence.limitations),
-                requires=tuple(evidence.requires),
-                checked_at=evidence.checked_at,
-            ),
+            evidence=_to_evidence(evidence),
             # The schema made every evidence field mandatory, so an item that validated
             # is one whose demonstration was recorded. Whether that demonstration is any
             # good is a judgement the reviewer makes with it in front of them.
             evidence_status=EvidenceStatus.VERIFIED_SOURCE_BACKED,
+            references=references,
+            created_by=author,
+        )
+    if isinstance(submitted, SubmittedUseCase):
+        evidence = submitted.evidence
+        return ContentItem(
+            content_type=ContentType.TESTED_USE_CASE,
+            audience=submitted.audience,
+            title=submitted.title,
+            use_case_theme=submitted.theme,
+            body=UseCaseBody(
+                what_the_person_did=submitted.what_the_person_did,
+                reported_benefit=submitted.reported_benefit,
+                how_to_try=tuple(submitted.how_to_try),
+                prompt_text=submitted.prompt_text,
+            ),
+            evidence=_to_evidence(evidence),
+            evidence_status=EvidenceStatus.VERIFIED_SOURCE_BACKED,
+            evidence_kind=submitted.evidence_kind,
+            series_name=submitted.series_name,
+            series_order=submitted.series_order,
+            references=references,
+            created_by=author,
+        )
+    if isinstance(submitted, SubmittedResourcePost):
+        return ContentItem(
+            content_type=ContentType.RESOURCE,
+            audience=submitted.audience,
+            title=submitted.title,
+            body=ResourceBody(
+                spec=_to_resource(submitted.resource),
+                what_it_gives_you=submitted.what_it_gives_you,
+                how_to_use=tuple(submitted.how_to_use),
+            ),
+            series_name=submitted.series_name,
+            series_order=submitted.series_order,
             references=references,
             created_by=author,
         )
@@ -240,3 +299,43 @@ def _readable(exc: ValidationError, filename: str) -> str:
         where = ".".join(str(part) for part in error["loc"]) or "(root)"
         lines.append(f"  {where}: {error['msg']}")
     return "\n".join(lines)
+
+
+def _to_evidence(submitted: SubmittedEvidence) -> PromptEvidence:
+    return PromptEvidence(
+        source_url=submitted.source_url,
+        source_title=submitted.source_title,
+        source_tier=submitted.source_tier,
+        source_platform=submitted.source_platform,
+        source_author=submitted.source_author,
+        tested_by=submitted.tested_by,
+        tool_used=submitted.tool_used,
+        model_version=submitted.model_version,
+        what_was_tested=submitted.what_was_tested,
+        observed_result=submitted.observed_result,
+        limitations=tuple(submitted.limitations),
+        requires=tuple(submitted.requires),
+        checked_at=submitted.checked_at,
+    )
+
+
+def _to_media(submitted: SubmittedMedia) -> MediaAsset:
+    return MediaAsset(
+        role=submitted.role,
+        origin=submitted.origin,
+        reference=submitted.reference,
+        description=submitted.description,
+        tool_used=submitted.tool_used,
+        model_version=submitted.model_version,
+        source_url=submitted.source_url,
+    )
+
+
+def _to_resource(submitted: SubmittedResource) -> ResourceSpec:
+    return ResourceSpec(
+        resource_type=submitted.resource_type,
+        title=submitted.title,
+        description=submitted.description,
+        version=submitted.version,
+        asset=_to_media(submitted.asset) if submitted.asset else None,
+    )

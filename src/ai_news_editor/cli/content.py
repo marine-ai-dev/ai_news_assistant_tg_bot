@@ -138,7 +138,12 @@ def validate(
     table.add_column("Subject")
     table.add_column("Title")
     for item in batch.items:
-        subject = getattr(item, "topic", None) or getattr(item, "concept", "")
+        subject = (
+            getattr(item, "topic", None)
+            or getattr(item, "theme", None)
+            or getattr(item, "concept", None)
+            or getattr(getattr(item, "resource", None), "resource_type", "")
+        )
         table.add_row(
             item.content_type.value,
             item.audience.value,

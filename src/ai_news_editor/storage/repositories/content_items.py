@@ -20,6 +20,8 @@ from ai_news_editor.domain.models import (
     ExplainerBody,
     PromptBody,
     PromptEvidence,
+    ResourceBody,
+    UseCaseBody,
 )
 
 #: Evidence columns, kept out of the payload blob so a reviewer can be shown each one
@@ -28,6 +30,8 @@ _EVIDENCE_COLUMNS = (
     "source_url",
     "source_title",
     "source_tier",
+    "source_platform",
+    "source_author",
     "tested_by",
     "tool_used",
     "model_version",
@@ -46,11 +50,16 @@ def _to_domain(row: sqlite3.Row) -> ContentItem:
     representation = data.pop("prompt_representation")
 
     evidence_fields = {name: data.pop(name) for name in _EVIDENCE_COLUMNS}
-    body: PromptBody | ExplainerBody
-    if data["content_type"] == ContentType.PROMPT.value:
+    body: PromptBody | ExplainerBody | UseCaseBody | ResourceBody
+    content_type = data["content_type"]
+    if content_type == ContentType.PROMPT.value:
         if representation is not None:
             payload["representation"] = representation
         body = PromptBody.model_validate(payload)
+    elif content_type == ContentType.TESTED_USE_CASE.value:
+        body = UseCaseBody.model_validate(payload)
+    elif content_type == ContentType.RESOURCE.value:
+        body = ResourceBody.model_validate(payload)
     else:
         body = ExplainerBody.model_validate(payload)
 
@@ -89,8 +98,11 @@ class ContentItemRepository:
                                        source_url, source_title, source_tier, tested_by,
                                        tool_used, model_version, what_was_tested,
                                        observed_result, limitations_json, requires_json,
-                                       checked_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                       checked_at, use_case_theme, evidence_kind,
+                                       source_platform, source_author,
+                                       series_name, series_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(item.id),
@@ -122,6 +134,12 @@ class ContentItemRepository:
                 json.dumps(list(evidence.limitations) if evidence else [], ensure_ascii=False),
                 json.dumps(list(evidence.requires) if evidence else [], ensure_ascii=False),
                 to_iso(evidence.checked_at) if evidence else None,
+                item.use_case_theme.value if item.use_case_theme else None,
+                item.evidence_kind.value if item.evidence_kind else None,
+                evidence.source_platform if evidence else None,
+                evidence.source_author if evidence else None,
+                item.series_name,
+                item.series_order,
             ),
         )
         return item

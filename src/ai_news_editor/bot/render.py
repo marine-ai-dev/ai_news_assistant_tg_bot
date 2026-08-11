@@ -25,6 +25,8 @@ TYPE_LABELS: dict[ContentType, str] = {
     ContentType.NEWS: "📰 NEWS",
     ContentType.PROMPT: "✨ PROMPT",
     ContentType.EXPLAINER: "🧠 EXPLAINER",
+    ContentType.TESTED_USE_CASE: "🛠 TESTED_USE_CASE",
+    ContentType.RESOURCE: "📚 RESOURCE",
 }
 
 AUDIENCE_LABELS: dict[AudienceTier, str] = {
@@ -148,7 +150,40 @@ def review_card(item: ReviewItem, *, position: int, total: int) -> str:
         else:
             header.append("Матеріал каналу — зовнішнього джерела немає")
 
+    if item.content_item is not None and item.content_item.series_label:
+        header.append(f"Серія: {item.content_item.series_label}")
+
     body = [*header, "", _SEPARATOR, "", item.rendered_post, "", _SEPARATOR, ""]
+
+    # Everything below is part of what is being approved. A human tapping Approve on a
+    # post whose prompt lives in a comment is approving the comment too, so it is shown
+    # in full rather than summarised.
+    version = item.version
+    if version.comment_text:
+        body += [
+            f"*КОМЕНТАР ДО ПУБЛІКАЦІЇ* ({version.prompt_placement.value})",
+            "",
+            version.comment_text,
+            "",
+            _SEPARATOR,
+            "",
+        ]
+    if version.media:
+        body.append("*МЕДІА*")
+        for asset in version.media:
+            line = f"• {asset.role.value} · {asset.origin.value} — {asset.description}"
+            if asset.tool_used:
+                line += f" (зроблено: {asset.tool_used})"
+            body.append(line)
+        body += ["", _SEPARATOR, ""]
+    if version.resource is not None:
+        spec = version.resource
+        body += [
+            "*РЕСУРС*",
+            f"• {spec.resource_type.value} — {spec.title}",
+            f"• {spec.description}",
+            "", _SEPARATOR, "",
+        ]
 
     internal = [f"_версія {version.version_no}_"]
     if item.score is not None:

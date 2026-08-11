@@ -44,6 +44,7 @@ from ai_news_editor.publishing.eligibility import (
 )
 from ai_news_editor.publishing.gate import approve_draft, authorization_for_approved_draft
 from ai_news_editor.storage.repositories import ContentItemRepository, DraftRepository
+from ai_news_editor.writing.schema import STYLE_VERSION
 
 pytestmark = pytest.mark.safety
 
@@ -436,7 +437,7 @@ class TestSchemaRefusals:
         item.update(item_overrides)
         return {
             "schema_version": "1",
-            "style_version": "2",
+            "style_version": STYLE_VERSION,
             "batch_id": "b",
             "items": [item],
         }

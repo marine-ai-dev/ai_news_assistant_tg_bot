@@ -1,4 +1,4 @@
-# Telegram style guide — v2
+# Telegram style guide — v3
 
 How posts for this channel are written. The arithmetic (length limits, link safety, post
 assembly) lives in `src/ai_news_editor/writing/format.py`; this is the voice.
@@ -400,3 +400,136 @@ Roughly, by content:
 
 If the channel drifts to 80% news for `GENERAL` readers, it has quietly become the
 industry newsletter this project set out not to be.
+
+---
+
+# v3: the channel's own look
+
+The channel `@learn_ai_easy` existed before this project and has a recognisable style.
+Everything below is that style, written down — not invented. A system that produced
+correct posts in the wrong voice would have quietly replaced the channel with a news
+feed.
+
+## Emoji-led paragraphs
+
+Most semantic blocks open with an emoji that fits what the block is doing. Not
+decoration: it gives a phone reader a shape to scan.
+
+```
+🎨 hook — what this is about
+🤖 what happened / what someone did
+✨ why it is interesting
+📋 the prompt
+💡 how to adapt it
+⚠️ the caveat
+🔗 the source
+👉 the invite
+```
+
+**Vary them.** Four hundred posts opening ✨ 💡 ⚠️ 🔗 in that exact order is a template,
+and readers feel it before they can name it. Choose what fits:
+
+> 🤖 🧠 ✨ 💡 🛠 📚 🎨 📸 🧩 👀 🚀 📌 🔍 📋 ⚡ 🗂 🎯 🔗
+
+One per block, not one per line. A paragraph that needs three emoji needs to be two
+paragraphs. And when a block genuinely does not want one, leave it off — the rule is a
+strong preference, not a quota.
+
+## The footer
+
+Every post closes with the invite:
+
+```
+👉 Запросити друзів: @learn_ai_easy
+```
+
+The leading emoji varies (👉 📲 💌 ✨ 🚀); the handle never does. It comes from
+configuration and is checked before a draft is created, because a writing session with
+a handle in its context is a session that can typo it, and a typo here sends every
+forwarded reader nowhere.
+
+**Why it exists:** somebody forwards a useful post to a friend. The friend sees where it
+came from and can subscribe. That is the entire growth mechanism this channel has, and
+it costs one line.
+
+**It is not the source line.** Keep them visually separate:
+
+```
+🔗 Джерело: назва
+https://…
+
+👉 Запросити друзів: @learn_ai_easy
+```
+
+One says where the story came from; the other says where the reader is. Run them
+together and the channel starts to look like the source.
+
+## Content types
+
+| Type | What it is |
+|---|---|
+| 📰 `NEWS` | Something happened and somebody reported it |
+| ✨ `PROMPT` | A tested prompt — the copyable prompt is the product |
+| 🛠 `TESTED_USE_CASE` | Something a person did with AI — the workflow is the product |
+| 🧠 `EXPLAINER` | One concept, without complicated words |
+| 📚 `RESOURCE` | A collection, checklist or cheat sheet worth keeping |
+
+### TESTED_USE_CASE, and the lifehack rubric
+
+The difference from `PROMPT` is where the value sits. A prompt post gives the reader
+something to copy. A use case gives them something to *recognise* — «о, так теж
+можна» — and the prompt may be one detail or absent.
+
+A **lifehack** is a use case whose evidence is one person saying this worked for them:
+`evidence_kind = USER_REPORTED_LIFEHACK`. Discovery sources: Reddit, Threads, X,
+YouTube, personal blogs, forums. Search first, open the original, capture the permalink,
+the handle and the date. If the original cannot be opened, there is no post — a search
+snippet is not a source.
+
+**Anecdote stays anecdote.** One person's experience is useful and is not evidence about
+everyone:
+
+> ✅ «Користувач Reddit розповів, що…», «автор пише, що…», «у цьому прикладі…»
+>
+> ❌ «ChatGPT доведено підвищує продуктивність…» — from one post by one person
+
+**Not a lightweight lifehack:** medical diagnosis, mental-health treatment, legal advice,
+financial decisions, emergencies. AI is not a substitute for a qualified person, and a
+cheerful post implying otherwise is the one that does real harm. Nor do we encourage
+uploading sensitive personal data casually.
+
+### RESOURCE
+
+A PDF collection, a checklist, a cheat sheet, a curated list. Editorial content, not a
+product: no payment, no gate, no funnel.
+
+## Prompt placement
+
+| Placement | When |
+|---|---|
+| `INLINE` | Short enough to sit in the post and be copied from it |
+| `COMMENT` | Long enough to swamp the post — say so and put it in the first comment |
+| `NONE` | The post has no prompt |
+
+For a comment, the post says where it went:
+
+> 📋 Повний промпт залишила в коментарях 👇
+
+**The comment is approved with the post.** It is written at the same time, shown on the
+review card in full, and covered by the same approval hash. Nothing is generated after a
+human says yes.
+
+## Demonstrated results
+
+A practical post is far better with the actual result in it. Record what the media is
+and where it came from: our own generated image (with the tool named), our own
+screenshot, or the source's media — which we point at rather than download. Reusing
+somebody's image because it was convenient is how a channel gets a complaint.
+
+Do not describe a visual result as tested without a trace of the actual result, unless
+the source itself shows it.
+
+## Series
+
+Optional grouping — «7 днів AI-креативів», day 3. Metadata, nothing more: nothing
+schedules or sequences on it yet.

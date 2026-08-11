@@ -2,7 +2,8 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: core MVP live-tested; content model v2 and a private Telegram review bot.** Collects from eight sources, normalizes and
+**Status: core MVP live-tested; five content formats, a rich post bundle, and a private
+Telegram review bot.** Collects from eight sources, normalizes and
 deduplicates deterministically, exports candidates for editorial review and imports ranked
 decisions, turns shortlisted stories into Ukrainian draft posts, puts them in front of a human
 who approves, edits, rejects or sends them back — and publishes an approved post to a Telegram
@@ -22,9 +23,16 @@ Two independent dimensions describe every post.
 
 | Type | What it is | Origin |
 |---|---|---|
-| `NEWS` | Something happened and somebody reported it | An `Article` from a source |
-| `PROMPT` | A **tested** workflow somebody demonstrated, retold for our readers | A source, always |
-| `EXPLAINER` | One concept, explained without jargon | Written here |
+| 📰 `NEWS` | Something happened and somebody reported it | An `Article` from a source |
+| ✨ `PROMPT` | A **tested** prompt — the copyable prompt is the product | A source, always |
+| 🛠 `TESTED_USE_CASE` | Something a person did with AI — the workflow is the product | A source, always |
+| 🧠 `EXPLAINER` | One concept, explained without jargon | Written here |
+| 📚 `RESOURCE` | A collection, checklist or cheat sheet worth keeping | Curated here |
+
+A **lifehack** is a use case whose evidence is one person reporting what worked for them
+(`evidence_kind = USER_REPORTED_LIFEHACK`) — found on Reddit, YouTube, a personal blog.
+Useful, and never upgraded into a general claim: «користувач розповів, що…», not «ШІ
+доведено підвищує продуктивність».
 
 **Audience** — how much the post may assume, lowest first:
 
@@ -532,3 +540,34 @@ That is deliberate. Approving is an editorial judgement; publishing is the irrev
 one, and putting both behind adjacent buttons on a phone is how the wrong one gets
 tapped. Safety tests assert the bot cannot reach a publisher, cannot build a channel
 payload, and cannot construct a `PublishAuthorization`.
+
+## What a post is made of
+
+A post stopped being only text in Phase 8.2, because the channel this project automates
+never was. A publication bundle may carry:
+
+| Part | What it is |
+|---|---|
+| Post text | Emoji-led paragraphs, as the channel has always written them |
+| Comment | The first comment, for a prompt too long to sit in the post |
+| Media | Result images, screenshots, a PDF — each with its origin recorded |
+| Resource | What a `RESOURCE` post gives the reader |
+| Footer | `👉 Запросити друзів: @learn_ai_easy` |
+
+**The approval covers all of it.** The content hash includes the comment, the media
+identities, the resource and the footer, so approving a post and then changing its
+comment produces a different version that nobody has approved. That is the same rule
+that has always applied to the text, extended to everything else a reader receives.
+
+**The footer is frozen at creation.** It is stored on the version rather than rebuilt
+from configuration at send time, so changing a setting cannot alter an approved post.
+The handle comes from `AI_NEWS_CHANNEL_HANDLE` and is verified before a draft exists — a
+writing session never types it.
+
+**Old posts hash exactly as they did.** A version with no bundle content omits the bundle
+from its hash entirely, so every approval recorded before Phase 8.2 still verifies,
+including the one behind the post already on the channel.
+
+Phase 8.2 models and reviews the bundle. **Sending media, comments and files to Telegram
+is Phase 8.3** — publication today is still text-only, and a bundle with a comment will
+have its comment reviewed but not yet sent.

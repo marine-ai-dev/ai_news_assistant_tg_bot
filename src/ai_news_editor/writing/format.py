@@ -146,13 +146,22 @@ def render_version(version: DraftVersion) -> str:
     its own way, a reviewer could approve one string and a channel could receive
     another. That is the entire failure mode this project exists to prevent, and the
     cheapest defence is to have only one renderer.
+
+    The channel call-to-action, when the version has one, closes the post. It is read
+    from the version rather than rebuilt from configuration, so changing a setting
+    cannot alter a post a human already approved. It is also kept visually separate
+    from the source line: one says where the story came from, the other says where the
+    reader is, and running them together would make the channel look like the source.
     """
-    return render_post(
+    text = render_post(
         headline=version.title,
         body=version.body,
         source_label=source_label_of(version.source_attribution),
         source_url=source_url_of(version),
     )
+    if version.footer_text:
+        text = f"{text}\n\n{version.footer_text}"
+    return text
 
 
 def check_length(text: str, post_format: PostFormat) -> LengthCheck:

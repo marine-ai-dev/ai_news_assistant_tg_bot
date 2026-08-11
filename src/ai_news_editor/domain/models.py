@@ -31,17 +31,23 @@ from ai_news_editor.domain.enums import (
     DuplicateReason,
     EditorialDecision,
     EvaluatorType,
+    EvidenceKind,
     EvidenceStatus,
     FetchOutcome,
+    MediaOrigin,
+    MediaRole,
     PostFormat,
     PrefilterReason,
+    PromptPlacement,
     PromptRepresentation,
     PromptTopic,
     PublicationStatus,
+    ResourceType,
     ReviewAction,
     SourceKind,
     SourceTier,
     TrustTier,
+    UseCaseTheme,
     VerificationStatus,
 )
 
@@ -214,6 +220,77 @@ class Evaluation(ImmutableDomainModel):
         )
 
 
+class MediaAsset(ImmutableDomainModel):
+    """One image, screenshot or file that belongs to a post.
+
+    Identity only — role, where it came from, and how to find it. Deliberately no size,
+    no modification time, no absolute path: none of those change what a reader receives,
+    and hashing them would make an approval expire because a file was touched.
+
+    ``origin`` is never inferred. Reusing somebody else's image without knowing it is
+    theirs is how a channel acquires a complaint, so a source image is recorded by URL
+    and left where it is rather than downloaded and republished.
+    """
+
+    role: MediaRole
+    origin: MediaOrigin
+    #: Where the asset is: a local path relative to the media directory for our own
+    #: files, or a URL for source media we are pointing at rather than reusing.
+    reference: NonEmptyStr
+    #: What it shows. Doubles as alt text and as the line a reviewer reads.
+    description: NonEmptyStr
+    #: For OWNER_GENERATED: what made it. Recorded as the tool names itself.
+    tool_used: str | None = None
+    #: Only when actually known. A model version is exactly the detail that feels safe
+    #: to infer and is wrong six months later.
+    model_version: str | None = None
+    generated_at: UtcDatetime | None = None
+    #: For SOURCE_MEDIA: the page it belongs to.
+    source_url: str | None = None
+
+    @model_validator(mode="after")
+    def _owner_generated_media_says_what_made_it(self) -> Self:
+        if self.origin is MediaOrigin.OWNER_GENERATED and not self.tool_used:
+            raise ValueError(
+                "owner-generated media must record the tool that produced it; "
+                "'we made this with AI' is not a provenance record"
+            )
+        if self.origin is MediaOrigin.SOURCE_MEDIA and not self.source_url:
+            raise ValueError("source media must record the page it belongs to")
+        return self
+
+    def identity(self) -> dict[str, str]:
+        """What the approval hash covers. Stable across file-system noise."""
+        return {
+            "role": self.role.value,
+            "origin": self.origin.value,
+            "reference": self.reference,
+        }
+
+
+class ResourceSpec(ImmutableDomainModel):
+    """A downloadable or curated thing a RESOURCE post is built around."""
+
+    resource_type: ResourceType
+    title: NonEmptyStr
+    description: NonEmptyStr
+    #: The file, when there is one. A curated list may have none — the post is the
+    #: resource — and that is a legitimate state rather than a missing field.
+    asset: MediaAsset | None = None
+    version: str | None = None
+
+    def identity(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "type": self.resource_type.value,
+            "title": self.title,
+        }
+        if self.asset is not None:
+            payload["asset"] = self.asset.identity()
+        if self.version:
+            payload["version"] = self.version
+        return payload
+
+
 class DraftVersion(ImmutableDomainModel):
     """One immutable snapshot of publishable content.
 
@@ -237,13 +314,61 @@ class DraftVersion(ImmutableDomainModel):
     #: Internal reviewer notes. Never published, and deliberately outside the content
     #: hash: a note must not change what a human is approving.
     writer_notes: tuple[str, ...] = ()
+
+    # -- the publication bundle (Phase 8.2) ---------------------------------
+    #
+    # A post stopped being only text. Everything below is part of what a human approves,
+    # which is why it is hashed: approving the text and then changing the comment, the
+    # image or the footer would be approval of something nobody read.
+
+    #: Where the prompt lives, for content that has one.
+    prompt_placement: PromptPlacement = PromptPlacement.NONE
+    #: The first comment, published with the post. Approved together with it, never
+    #: written afterwards.
+    comment_text: str | None = None
+    media: tuple[MediaAsset, ...] = ()
+    resource: ResourceSpec | None = None
+    #: The channel call-to-action, frozen at creation. Stored rather than rendered from
+    #: configuration at send time, so a config change cannot alter an approved post.
+    footer_text: str | None = None
+
     created_by: NonEmptyStr
     created_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _a_comment_prompt_needs_a_comment(self) -> Self:
+        if self.prompt_placement is PromptPlacement.COMMENT and not (
+            self.comment_text and self.comment_text.strip()
+        ):
+            raise ValueError(
+                "prompt_placement is COMMENT but there is no comment text; the post "
+                "would promise a prompt that does not exist"
+            )
+        return self
+
+    def bundle(self) -> dict[str, object]:
+        """The approval-relevant publication payload beyond the post text."""
+        payload: dict[str, object] = {}
+        if self.prompt_placement is not PromptPlacement.NONE:
+            payload["prompt_placement"] = self.prompt_placement.value
+        if self.comment_text:
+            payload["comment_text"] = self.comment_text
+        if self.media:
+            payload["media"] = [asset.identity() for asset in self.media]
+        if self.resource is not None:
+            payload["resource"] = self.resource.identity()
+        if self.footer_text:
+            payload["footer_text"] = self.footer_text
+        return payload
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def content_hash(self) -> str:
-        """Fingerprint of everything a reviewer sees. See :mod:`.content`."""
+        """Fingerprint of everything a reviewer sees. See :mod:`.content`.
+
+        A version with no bundle content hashes exactly as it did before Phase 8.2,
+        which is what keeps the already-published post's approval verifiable.
+        """
         return compute_content_hash(
             title=self.title,
             body=self.body,
@@ -251,6 +376,7 @@ class DraftVersion(ImmutableDomainModel):
             category=self.category.value,
             audience=self.audience.value,
             source_attribution=self.source_attribution,
+            bundle=self.bundle(),
         )
 
 
@@ -457,6 +583,11 @@ class PromptEvidence(ImmutableDomainModel):
     source_url: NonEmptyStr
     source_title: NonEmptyStr
     source_tier: SourceTier
+    #: Where it was found — Reddit, Threads, X, YouTube, a blog. Social posts vanish;
+    #: recording the platform and handle preserves what was reviewed without copying
+    #: somebody's whole post into our database.
+    source_platform: str | None = None
+    source_author: str | None = None
     #: Who ran it, as the source identifies them: an author, a company, "Reddit user
     #: u/…". Not a guess, and not "the internet".
     tested_by: NonEmptyStr
@@ -537,6 +668,31 @@ class ExplainerBody(ImmutableDomainModel):
     try_this: str | None = None
 
 
+class UseCaseBody(ImmutableDomainModel):
+    """What somebody actually did with AI, and what came of it.
+
+    The difference from :class:`PromptBody` is where the value sits. A prompt post gives
+    the reader something to copy; a use case gives them something to recognise — *oh,
+    you can do that* — and the prompt, if there is one at all, is a detail.
+    """
+
+    what_the_person_did: NonEmptyStr
+    reported_benefit: NonEmptyStr
+    #: How a reader could try the same thing. Not a promise that it will work for them.
+    how_to_try: tuple[NonEmptyStr, ...] = Field(min_length=1)
+    #: Present only when the source actually showed one.
+    prompt_text: str | None = None
+
+
+class ResourceBody(ImmutableDomainModel):
+    """A curated or downloadable thing the post is built around."""
+
+    spec: ResourceSpec
+    #: What the reader gets out of it, in their terms.
+    what_it_gives_you: NonEmptyStr
+    how_to_use: tuple[NonEmptyStr, ...] = Field(min_length=1)
+
+
 class ContentItem(ImmutableDomainModel):
     """Editorial-original source material for a prompt or an explainer.
 
@@ -554,7 +710,16 @@ class ContentItem(ImmutableDomainModel):
     #: is the thing a human actually approves.
     title: NonEmptyStr
     topic: PromptTopic | None = None
-    body: PromptBody | ExplainerBody
+    #: For TESTED_USE_CASE: the area of life it belongs to.
+    use_case_theme: UseCaseTheme | None = None
+    body: PromptBody | ExplainerBody | UseCaseBody | ResourceBody
+    #: What kind of act produced the evidence. A vendor demo and one person's Reddit
+    #: post are both honest, and they are not the same claim.
+    evidence_kind: EvidenceKind | None = None
+    #: Optional grouping across items — "7 днів AI-креативів", day 3. Metadata, not a
+    #: campaign system: nothing schedules or sequences on it.
+    series_name: str | None = None
+    series_order: int | None = Field(default=None, ge=1)
     references: tuple[ContentReference, ...] = ()
     #: Prompts only. The demonstration this post rests on.
     evidence: PromptEvidence | None = None
@@ -601,16 +766,51 @@ class ContentItem(ImmutableDomainModel):
                     "evidence status is a PROMPT concept; an EXPLAINER is editorial-"
                     "original by design"
                 )
+        elif self.content_type is ContentType.TESTED_USE_CASE:
+            if not isinstance(self.body, UseCaseBody):
+                raise ValueError("a TESTED_USE_CASE needs a use-case body")
+            if self.evidence is None:
+                raise ValueError(
+                    "a TESTED_USE_CASE reports something somebody did; without the "
+                    "evidence it is just a story we made up"
+                )
+            if self.evidence_status is None:
+                raise ValueError("a TESTED_USE_CASE needs an evidence status")
+        elif self.content_type is ContentType.RESOURCE:
+            if not isinstance(self.body, ResourceBody):
+                raise ValueError("a RESOURCE needs a resource body")
+            if self.evidence is not None:
+                raise ValueError(
+                    "a RESOURCE is curated material, not a report of a tested workflow"
+                )
         else:
             raise ValueError(
                 f"{self.content_type.value} is sourced from an article, not written as a "
                 "content item"
             )
+
+        if self.use_case_theme is not None and (
+            self.content_type is not ContentType.TESTED_USE_CASE
+        ):
+            raise ValueError("a use-case theme belongs to a TESTED_USE_CASE")
+        if (self.series_order is None) != (self.series_name is None):
+            raise ValueError("a series needs both a name and a position, or neither")
         return self
 
     @property
     def subject(self) -> str:
-        """What this item is about, for a review screen: a topic or a concept."""
+        """What this item is about, for a review screen."""
         if isinstance(self.body, ExplainerBody):
             return self.body.concept
+        if isinstance(self.body, ResourceBody):
+            return self.body.spec.resource_type.value
+        if self.use_case_theme is not None:
+            return self.use_case_theme.value
         return self.topic.value if self.topic else self.title
+
+    @property
+    def series_label(self) -> str | None:
+        """"7 днів AI-креативів · 3" — for a review screen, when there is a series."""
+        if self.series_name is None or self.series_order is None:
+            return None
+        return f"{self.series_name} · {self.series_order}"

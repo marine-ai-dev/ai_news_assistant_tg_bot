@@ -82,6 +82,22 @@ class Settings(BaseSettings):
         ),
     )
 
+    channel_handle: str = Field(
+        default="@learn_ai_easy",
+        description=(
+            "The public channel handle used in the forwarding call-to-action. Configured "
+            "rather than written into prose, so a writing session cannot mistype it."
+        ),
+    )
+    channel_footer_enabled: bool = Field(
+        default=True,
+        description="Whether new drafts close with the invite-a-friend call-to-action.",
+    )
+    channel_footer_text: str = Field(
+        default="Запросити друзів",
+        description="The call-to-action wording. The leading emoji varies per post.",
+    )
+
     @field_validator("telegram_channel")
     @classmethod
     def _check_channel(cls, value: str | None) -> str | None:
