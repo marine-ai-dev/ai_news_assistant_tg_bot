@@ -208,9 +208,19 @@ class TestSendMessage:
 
     def test_an_ok_response_with_no_result_is_reported(self) -> None:
         with client_with(responds({"ok": True})) as client, pytest.raises(
-            TelegramApiError, match="no result object"
+            TelegramApiError, match="unusable result"
         ):
             client.send_message({"chat_id": "@c", "text": "x"})
+
+    def test_an_array_result_is_accepted_for_methods_that_return_one(self) -> None:
+        """getUpdates returns a list, not an object. Both are valid Bot API results."""
+        with client_with(responds({"ok": True, "result": [{"update_id": 1}]})) as client:
+            assert client.request("getUpdates", {}) == {"result": [{"update_id": 1}]}
+
+    def test_a_bare_true_result_is_accepted(self) -> None:
+        """answerCallbackQuery returns true, and that is a success."""
+        with client_with(responds({"ok": True, "result": True})) as client:
+            assert client.request("answerCallbackQuery", {"callback_query_id": "x"}) == {}
 
 
 class TestRateLimiting:

@@ -6,7 +6,11 @@ are used, all of them outbound:
 * ``getMe`` — confirm the token is valid and learn the bot's identity.
 * ``getChat`` — confirm the destination exists and is the kind of chat we can post to.
 * ``getChatMember`` — confirm the bot is an administrator with ``can_post_messages``.
-* ``sendMessage`` — the only method that changes anything.
+* ``sendMessage`` — the only method that changes anything on a channel.
+
+Phase 8 adds the incoming side (``getUpdates``, ``answerCallbackQuery``,
+``editMessageText``) through :meth:`TelegramClient.request`. The review bot builds on
+that; it is a separate module with separate responsibilities, and it cannot publish.
 
 Deliberately no framework. python-telegram-bot, aiogram and Telethon all bring an
 update loop, a dispatcher and a handler abstraction; this application receives nothing
@@ -227,6 +231,18 @@ class TelegramClient:
         chat = result.get("chat") or {}
         return SentMessage(message_id=int(result["message_id"]), chat_id=str(chat.get("id", "")))
 
+    def request(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Call any Bot API method that is not a publication.
+
+        The review bot's UI calls come through here: getUpdates, answerCallbackQuery,
+        editMessageText, and sendMessage to the *owner's private chat*. They get the
+        ordinary error handling — no retry, no uncertain-outcome machinery — because a
+        duplicated or missing UI message is an inconvenience, while a duplicated channel
+        post is not. That distinction is the reason this is a separate entry point from
+        :meth:`send_message`.
+        """
+        return self._call(method, payload)
+
     # -- transport -----------------------------------------------------------
 
     def _call(
@@ -278,9 +294,15 @@ class TelegramClient:
 
             if body.get("ok") is True:
                 result = body.get("result")
-                if not isinstance(result, dict):
-                    raise TelegramApiError(f"{method} succeeded but returned no result object")
-                return result
+                # Most methods return an object; getUpdates returns an array, and
+                # answerCallbackQuery returns a bare true. All three are valid.
+                if isinstance(result, dict):
+                    return result
+                if isinstance(result, list):
+                    return {"result": result}
+                if result is True:
+                    return {}
+                raise TelegramApiError(f"{method} returned an unusable result")
 
             error = self._classify(method, response.status_code, body)
             if (

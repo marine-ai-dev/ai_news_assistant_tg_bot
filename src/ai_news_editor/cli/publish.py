@@ -150,6 +150,116 @@ def telegram_doctor() -> None:
         raise typer.Exit(code=1)
 
 
+@telegram_app.command("whoami")
+def telegram_whoami() -> None:
+    """Print the Telegram user id of whoever messages the bot next.
+
+    The review bot must know which single account may use it, and that id is not
+    discoverable from the token. This waits for one message, prints the sender's id, and
+    exits — no editorial data is read and nothing is stored.
+    """
+    from ai_news_editor.bot.api import BotApi, parse_update
+    from ai_news_editor.bot.review_bot import discard_backlog
+
+    settings = _settings()
+    if settings.telegram_bot_token is None:
+        err_console.print(
+            "[bold red]Not configured:[/bold red] AI_NEWS_TELEGRAM_BOT_TOKEN is not set."
+        )
+        raise typer.Exit(code=2)
+
+    console.print(
+        "Open Telegram, find your bot, and send it any message.\n"
+        "[dim]Waiting… Ctrl+C to stop.[/dim]"
+    )
+    with TelegramClient(settings.telegram_bot_token.get_secret_value()) as client:
+        api = BotApi(client)
+        offset = discard_backlog(api)
+        try:
+            while True:
+                for update in api.get_updates(offset):
+                    update_id = update.get("update_id")
+                    if isinstance(update_id, int):
+                        offset = update_id + 1
+                    parsed = parse_update(update)
+                    if parsed is None:
+                        continue
+                    console.print(
+                        f"\nYour Telegram user id: [bold]{parsed.user_id}[/bold]\n\n"
+                        "Put it in [bold].env[/bold]:\n"
+                        f"  AI_NEWS_TELEGRAM_OWNER_USER_ID={parsed.user_id}"
+                    )
+                    return
+        except KeyboardInterrupt:
+            console.print("\nStopped. Nothing was changed.")
+
+
+@telegram_app.command("review-bot")
+def telegram_review_bot() -> None:
+    """Run the private review bot until interrupted.
+
+    Long polling, so no public URL, no webhook and no hosting: it works for as long as
+    this process is running on this machine.
+
+    The bot can approve, reject, request a rewrite and edit — all through the same
+    review service the terminal uses. It cannot publish.
+    """
+    from ai_news_editor.bot.api import BotApi
+    from ai_news_editor.bot.review_bot import (
+        ReviewBot,
+        discard_backlog,
+        pending_summary,
+        poll,
+    )
+    from ai_news_editor.bot.session import Session
+    from ai_news_editor.cli.main import open_migrated_database
+
+    settings = _settings()
+    if settings.telegram_bot_token is None:
+        err_console.print(
+            "[bold red]Not configured:[/bold red] AI_NEWS_TELEGRAM_BOT_TOKEN is not set."
+        )
+        raise typer.Exit(code=2)
+    if settings.telegram_owner_user_id is None:
+        err_console.print(
+            "[bold red]Not configured:[/bold red] AI_NEWS_TELEGRAM_OWNER_USER_ID is not "
+            "set.\nFind your id with [bold]ai-news telegram whoami[/bold], then put it "
+            "in .env."
+        )
+        raise typer.Exit(code=2)
+
+    connection = open_migrated_database()
+    try:
+        counts = pending_summary(connection)
+        with TelegramClient(settings.telegram_bot_token.get_secret_value()) as client:
+            api = BotApi(client)
+            identity = client.get_me()
+            offset = discard_backlog(api)
+
+            console.print(
+                f"Review bot running as [bold]@{identity.username or identity.first_name}"
+                f"[/bold].\n"
+                f"Awaiting review: [bold]{counts['pending']}[/bold]  ·  "
+                f"approved {counts['approved']}  ·  published {counts['published']}\n"
+                "Send [bold]/review[/bold] to the bot in Telegram. Ctrl+C to stop.\n"
+                "[dim]Approving here does not publish anything.[/dim]"
+            )
+
+            bot = ReviewBot(
+                api=api,
+                connection=connection,
+                owner_id=settings.telegram_owner_user_id,
+                session=Session(),
+            )
+            try:
+                for _update_id in poll(bot, offset=offset):
+                    pass
+            except KeyboardInterrupt:
+                console.print("\nStopped. Every decision already made is saved.")
+    finally:
+        connection.close()
+
+
 # ---------------------------------------------------------------------------
 # publish
 # ---------------------------------------------------------------------------

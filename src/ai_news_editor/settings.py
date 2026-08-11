@@ -73,6 +73,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    telegram_owner_user_id: int | None = Field(
+        default=None,
+        description=(
+            "The single Telegram user allowed to use the review bot. Not a secret, but "
+            "not committed either: it identifies a real account. Discover it with "
+            "'ai-news telegram whoami'."
+        ),
+    )
+
     @field_validator("telegram_channel")
     @classmethod
     def _check_channel(cls, value: str | None) -> str | None:

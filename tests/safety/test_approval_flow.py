@@ -535,22 +535,83 @@ class TestNoBypass:
         ):
             assert forbidden not in source
 
-    def test_only_the_publishing_layer_can_send(self) -> None:
-        """No earlier stage of the pipeline can cause a post."""
+    def test_only_the_publishing_layer_can_send_to_a_channel(self) -> None:
+        """No earlier stage of the pipeline can cause a post.
+
+        Phase 8 adds a second caller of sendMessage: the review bot, which writes to the
+        owner's private chat. The distinction that matters is not the method, it is the
+        destination — so the assertion is that only the publisher can build a payload
+        aimed at the configured channel.
+        """
         from pathlib import Path
 
         import ai_news_editor
 
         package_root = Path(ai_news_editor.__file__).parent
-        # Only a call, not a mention: several modules explain sendMessage in prose,
-        # and the redaction filter names it in a comment about what a leaked URL holds.
+        allowed = {"publishing/telegram.py", "bot/api.py"}
         offenders = [
             path.relative_to(package_root).as_posix()
             for path in package_root.rglob("*.py")
             if '"sendMessage"' in path.read_text(encoding="utf-8")
-            and path.relative_to(package_root).as_posix() != "publishing/telegram.py"
+            and path.relative_to(package_root).as_posix() not in allowed
         ]
         assert offenders == []
+
+    def test_the_review_bot_cannot_build_a_channel_payload(self) -> None:
+        """It sends to a chat id it was handed, never to the publication destination."""
+        from pathlib import Path
+
+        import ai_news_editor
+
+        bot_dir = Path(ai_news_editor.__file__).parent / "bot"
+        for path in bot_dir.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for forbidden in (
+                "telegram_channel",
+                "build_message",
+                "publish_draft",
+                "prepare_publication",
+                "TelegramPublisher",
+            ):
+                assert forbidden not in source, f"{path.name} references {forbidden}"
+
+    def test_the_review_bot_cannot_issue_an_authorization(self) -> None:
+        """Approval goes through the gate's own function; the bot has no other route."""
+        from pathlib import Path
+
+        import ai_news_editor
+
+        bot_dir = Path(ai_news_editor.__file__).parent / "bot"
+        for path in bot_dir.rglob("*.py"):
+            # Imports and calls, not prose: review_bot's docstring explains at length
+            # that it constructs no authorization, and that sentence is not a violation.
+            code = "\n".join(
+                line
+                for line in path.read_text(encoding="utf-8").splitlines()
+                if not line.lstrip().startswith(("#", '"""', "*", "``"))
+            )
+            assert "issue_publication_authorization" not in code
+            assert "PublishAuthorization" not in code, (
+                f"{path.name} handles an authorization; approval belongs to the gate"
+            )
+
+    def test_the_review_bot_writes_no_state_of_its_own(self) -> None:
+        """Every decision is a service call. No handler touches a status or a version."""
+        from pathlib import Path
+
+        import ai_news_editor
+
+        bot_dir = Path(ai_news_editor.__file__).parent / "bot"
+        for path in bot_dir.rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for forbidden in (
+                "set_status",
+                "append_version",
+                "ReviewDecision(",
+                "INSERT INTO",
+                "UPDATE drafts",
+            ):
+                assert forbidden not in source, f"{path.name} does its own writing: {forbidden}"
 
     def test_the_publisher_protocol_demands_an_authorization(self) -> None:
         import inspect

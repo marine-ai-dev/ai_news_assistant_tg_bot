@@ -551,17 +551,34 @@ class TestNoIntegrationsExist:
         offenders = [name for name, text in self._sources() if pattern.search(text)]
         assert offenders == []
 
-    def test_no_incoming_telegram_handling_exists(self) -> None:
-        """Phase 7 is outbound only. The review bot is a later, separate thing."""
+    def test_incoming_telegram_handling_is_confined_to_the_bot(self) -> None:
+        """Phase 8 adds an inbox. It lives in one package and touches nothing else.
+
+        The publishing path stays outbound-only: a module that can send to a channel
+        must not also be reading button taps.
+        """
+        # Quoted method names and field accesses — an actual call — rather than the
+        # bare word, which appears in prose explaining where the inbox lives.
         forbidden = (
-            "getUpdates", "setWebhook", "callback_query", "InlineKeyboard",
-            "reply_markup", "answerCallbackQuery",
+            '"getUpdates"',
+            '"answerCallbackQuery"',
+            '"callback_query"',
+            '"inline_keyboard"',
         )
         offenders = [
             (name, token)
             for name, text in self._sources()
             for token in forbidden
-            if token in text
+            if token in text and not name.startswith(("bot/", "cli/"))
+        ]
+        assert offenders == []
+
+    def test_no_webhook_exists(self) -> None:
+        """Long polling only. A webhook would mean a public URL and a deployment."""
+        offenders = [
+            name
+            for name, text in self._sources()
+            if "setWebhook" in text or "deleteWebhook" in text
         ]
         assert offenders == []
 

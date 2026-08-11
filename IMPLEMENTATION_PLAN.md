@@ -1705,3 +1705,108 @@ run every invariant per content type.
 One regression was found and fixed: `article_ids_with_drafts` did `UUID(row["article_id"])`
 over every draft, and the first editorial-original row turned it into `UUID(None)`. The
 kind of thing nullable columns do to code written before they were nullable.
+
+---
+
+## 29. Phase 8 — the private Telegram review bot
+
+Reviewing from a terminal means reviewing at a desk. Most of the moments when there is
+time to read four drafts properly are not at a desk, so the review workflow moved to a
+phone. Nothing about what a review *is* changed.
+
+### 29.1 A front end, and the tests that keep it one
+
+`bot/review_bot.py` makes no editorial decision. Approve calls
+`publishing.gate.approve_draft`; reject, rewrite and edit call `review.service`. Four
+architecture tests enforce it: the package contains no `PublishAuthorization`, no
+`set_status`, no `append_version`, no `ReviewDecision(`, no `INSERT INTO`, and nothing
+that could build a channel payload.
+
+The temptation this guards against is specific and strong. Writing
+`drafts.set_status(APPROVED)` inside a button handler is three lines and obviously
+works. It also silently drops the version binding, the compare-and-swap and the decision
+record, and it would keep working for months before anyone noticed which post went out.
+
+### 29.2 Callback data is a claim, not a fact
+
+`callback_data` travelled to a phone and came back. It carries an action, eight
+characters of draft id and the version number the card was drawn from — no text, no
+URLs, no hashes, no ids of anything else. Every tap re-reads the draft from the database
+and refuses if the version has moved.
+
+That last check is the one that matters. The realistic failure is not an attacker: it is
+the owner editing a draft on a laptop, then tapping Approve on a card their phone drew
+ten minutes earlier. The tap is refused and the current version is shown.
+
+The Bot API limits `callback_data` to a small number of bytes. The documentation page
+truncates before the InlineKeyboardButton table in this environment, so the exact figure
+could not be re-read; the budget is set to the long-standing documented 64 and a test
+asserts every string the bot emits fits it.
+
+### 29.3 Two taps for anything that decides
+
+Approve and reject are confirm-then-act. Phase 6 required typing `APPROVE` in a
+terminal, and the equivalent on a phone is a second deliberate tap — a thumb lands on a
+button by accident far more easily than a hand types eight letters.
+
+### 29.4 Owner authorization before anything else
+
+One configured account. The check runs on every update before a draft is loaded, and an
+unauthorized user gets four words: *«Цей бот приватний.»* No counts, no redacted card,
+no confirmation that a queue exists. Tests assert that no command leaks a status, an
+audience, a source or a version to a stranger, and that a stranger holding valid-looking
+callback data cannot approve.
+
+The owner id is not discoverable from the token, so `ai-news telegram whoami` waits for
+one message, prints the sender's id and exits.
+
+### 29.5 No migration 008
+
+Two things could have wanted persistence: the update offset and the edit-mode state.
+Neither needed a table.
+
+The offset is handled by **discarding the backlog on startup**: the bot confirms
+whatever Telegram is holding without acting on it, then polls forward. A queued Approve
+tap from before a restart is exactly the thing that must not fire at boot — the human
+formed that intention against a state that may no longer exist. Nothing is lost that
+matters, because a decision they still want is one tap away.
+
+Edit-mode state is in memory and deliberately does not survive a restart. If the process
+dies mid-edit, the edit did not happen: no version appended, no decision recorded.
+Persisting it would let a stale intention outlive the context that produced it.
+
+Neither choice is load-bearing for safety. Every action re-reads and re-checks the
+database, so in-memory state is never what makes something safe — a test starts a fresh
+bot with no session and replays a stale callback to prove it.
+
+### 29.6 A failed message never unwinds a decision
+
+If the service approves and Telegram then refuses the confirmation bubble, the approval
+stands and the failure is logged. Rolling back a committed human decision because a chat
+message did not arrive would be far worse than a missing message. Tested with a
+transport that rejects every send.
+
+### 29.7 The bot cannot publish
+
+Approve sets `APPROVED` and stops. There is no *Approve & Publish* button and there will
+not be one on a phone: approving is an editorial judgement, publishing is the
+irreversible one, and adjacent buttons are how the wrong one gets tapped. Publication
+stays in the terminal, behind the typed word `PUBLISH`.
+
+`publishing/gate.py` needed zero changes for this phase — as it did for Phase 7.5.
+
+---
+
+## 30. What comes next
+
+**Phase 9 — publication queue and scheduling.** Only worth starting once the review bot
+has been used enough to know whether the UX is comfortable. Roughly: an ordered queue of
+approved drafts, a chosen send time, spacing rules, and a human confirmation that still
+sits between the queue and the channel. The hard question is not the scheduler, it is
+what "scheduled" means for a gate that binds approval to an exact version — an approved
+post sitting in a queue for three days is an approval ageing in public.
+
+**Phase 10 — content balancing and calendar.** The mix targets in the style guide,
+turned into something that reports drift rather than enforcing quotas.
+
+Neither is started.

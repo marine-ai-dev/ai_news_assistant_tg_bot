@@ -2,7 +2,7 @@
 
 A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
 
-**Status: core MVP complete and live-tested; content model v2 (phase 7.5).** Collects from eight sources, normalizes and
+**Status: core MVP live-tested; content model v2 and a private Telegram review bot.** Collects from eight sources, normalizes and
 deduplicates deterministically, exports candidates for editorial review and imports ranked
 decisions, turns shortlisted stories into Ukrainian draft posts, puts them in front of a human
 who approves, edits, rejects or sends them back — and publishes an approved post to a Telegram
@@ -117,6 +117,8 @@ Safe to run repeatedly; it applies only pending migrations.
 | `ai-news review status` | Show how many drafts sit in each state |
 | `ai-news review history <draft-id>` | Show every version and every human decision on a draft |
 | `ai-news telegram doctor` | Check the bot, the destination and posting rights. Sends nothing |
+| `ai-news telegram whoami` | Print your Telegram user id, for the review bot |
+| `ai-news telegram review-bot` | Run the private review bot (long polling, local) |
 | `ai-news publish <draft-id>` | Publish one approved draft, after typing `PUBLISH` |
 | `ai-news publication approved` | List drafts that are approved and therefore publishable |
 | `ai-news publication list` | The publication log: successes, failures, unresolved attempts |
@@ -447,3 +449,64 @@ refuses a news draft that has none. Posts written here carry no `🔗 Джере
 because there is no source to name. Factual references — the pricing page you checked
 before describing a free plan — are stored separately, each recording *what claim it
 supports*, and are never dressed up as a source article.
+
+## Reviewing from your phone
+
+The same review workflow as `ai-news review`, behind buttons in a private Telegram chat.
+It is the same bot that publishes — one BotFather bot, two jobs — and it is for you
+alone: every update is checked against one configured account before a draft is loaded.
+
+### Setup, once
+
+```bash
+.venv/bin/ai-news telegram whoami
+```
+
+Message your bot anything; the command prints your Telegram user id and exits. Put it in
+`.env` as `AI_NEWS_TELEGRAM_OWNER_USER_ID`. It stays out of git — it identifies a real
+account, and nobody else's id should ever be in there.
+
+### Running it
+
+```bash
+.venv/bin/ai-news telegram review-bot
+```
+
+Long polling: no webhook, no public URL, no hosting. The bot works for as long as this
+process is running on this Mac, and stops when you close the terminal. Nothing is lost
+when it stops — every decision was committed when you made it.
+
+### Using it
+
+`/review` shows the next draft awaiting review, best editorial score first — the same
+queue and the same ordering the terminal uses.
+
+| Button | What happens |
+|---|---|
+| ✅ Схвалити | Asks to confirm, then approves **that exact version** |
+| ✏️ Редагувати | Send replacement text as one message: first line headline, rest body |
+| 📝 Переписати | Marks `NEEDS_REWRITE`. Nothing is regenerated automatically |
+| ❌ Відхилити | Asks to confirm, then rejects. Nothing is deleted |
+| ⏭ Пропустити | Navigation only — records nothing |
+| 📜 Історія | Versions and decisions so far |
+
+Approve and reject both take **two taps**. A single mis-tap on a phone must not decide
+anything, which is the same reason the terminal makes you type `APPROVE`.
+
+If the draft changed between the card being drawn and the button being tapped — you
+edited it elsewhere, or it was already decided — the tap is refused and the current
+version is shown instead. The approval is bound to the version you actually read.
+
+### The review bot does not publish
+
+Approving in Telegram sets `APPROVED` and stops. Publication stays a separate, explicit
+act:
+
+```bash
+.venv/bin/ai-news publish <draft-id>
+```
+
+That is deliberate. Approving is an editorial judgement; publishing is the irreversible
+one, and putting both behind adjacent buttons on a phone is how the wrong one gets
+tapped. Safety tests assert the bot cannot reach a publisher, cannot build a channel
+payload, and cannot construct a `PublishAuthorization`.
