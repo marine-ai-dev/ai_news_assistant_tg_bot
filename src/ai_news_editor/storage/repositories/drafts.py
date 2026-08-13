@@ -26,6 +26,7 @@ from ai_news_editor.domain.errors import EntityNotFoundError, RepositoryError
 from ai_news_editor.domain.models import Draft, DraftVersion, MediaAsset, ResourceSpec
 from ai_news_editor.domain.transitions import assert_draft_transition
 from ai_news_editor.storage.db import transaction
+from ai_news_editor.storage.repositories.publication_queue import invalidate_active
 
 #: Draft states in which new content may be written. Terminal and in-flight states are
 #: excluded: rewriting a published or in-flight post is a correctness hazard.
@@ -213,6 +214,18 @@ class DraftRepository:
 
         with transaction(self._conn) as conn:
             self._insert_version(conn, version)
+            # A schedule points at an exact version. This draft now has a different
+            # one, so anything waiting to publish the old text can no longer publish
+            # anything — and must not be quietly repointed at words nobody approved.
+            invalidate_active(
+                conn,
+                draft_id,
+                reason=(
+                    f"the draft was edited; version {next_no} needs a new approval and a "
+                    "new schedule"
+                ),
+                actor=created_by,
+            )
             conn.execute(
                 "UPDATE drafts SET current_version_id = ?, status = ?, updated_at = ? "
                 "WHERE id = ?",

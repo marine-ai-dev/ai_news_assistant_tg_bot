@@ -168,7 +168,7 @@ def execute(
             continue
 
         try:
-            outcome = _run(client, step, target, media_root, main_message_id)
+            outcome = run_step(client, step, target, media_root, main_message_id)
         except PublicationOutcomeUncertainError as exc:
             components.add(
                 publication_id=publication_id,
@@ -229,7 +229,7 @@ def execute(
     return outcomes
 
 
-def _run(
+def run_step(
     client: TelegramClient,
     step: Step,
     target: str,

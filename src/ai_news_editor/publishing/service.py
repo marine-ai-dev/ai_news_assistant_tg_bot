@@ -41,7 +41,9 @@ from ai_news_editor.observability.redaction import redact
 from ai_news_editor.publishing.base import Publisher
 from ai_news_editor.publishing.gate import authorization_for_approved_draft, verify_publication
 from ai_news_editor.publishing.message import TelegramMessage, build_message
-from ai_news_editor.publishing.plan import BundlePlan, build_plan
+from ai_news_editor.publishing.plan import BundlePlan, Component, build_plan
+from ai_news_editor.publishing.rich import ComponentRepository, execute, run_step
+from ai_news_editor.publishing.telegram import TelegramClient
 from ai_news_editor.storage.db import transaction
 from ai_news_editor.storage.repositories import DraftRepository, PublicationRepository
 
@@ -316,3 +318,195 @@ def approved_drafts(connection: sqlite3.Connection, limit: int = 50) -> list[Dra
     """Drafts a human has approved and which are therefore publishable."""
     return DraftRepository(connection).list_by_status(DraftStatus.APPROVED, limit=limit)
 
+
+
+def publish_bundle(
+    connection: sqlite3.Connection,
+    plan: PublicationPlan,
+    client: TelegramClient,
+    *,
+    media_root: Path | None = None,
+) -> Publication:
+    """Send a whole bundle — post, images, comment, file — and record every part.
+
+    :func:`publish_draft` sends one message and is the whole story for a text-only post.
+    A rich bundle is several Telegram calls with no transaction across them, so the
+    sequencing here is different in one specific way:
+
+        **the publications row is written from the outcome of the main message, before
+        the remaining components are attempted.**
+
+    That order is forced and it is also correct. ``publications`` is append-only, so its
+    row cannot be written provisionally and corrected later; and component rows reference
+    it, so it has to exist before any of them. Writing it from the main message is the
+    honest reading — the main message *is* whether the post exists. A comment that fails
+    afterwards is recorded as a failed component of a publication that succeeded, which
+    is exactly what happened.
+
+    Everything after the main message goes through :func:`rich.execute`, which skips any
+    component already recorded as succeeded. That is what makes a retry safe: the main
+    post is on record, so it is never sent twice.
+
+    Raises:
+        PublicationAlreadyExistsError: this version already reached this destination.
+        PublicationOutcomeUncertainError: a send's result was lost. Recorded, and the
+            draft stays in PUBLISHING for a human to resolve.
+        TelegramError: a definite failure.
+    """
+    version = plan.version
+    channel = plan.channel
+    drafts = DraftRepository(connection)
+    publications = PublicationRepository(connection)
+    components = ComponentRepository(connection)
+
+    if plan.already_published is not None:
+        raise PublicationAlreadyExistsError(
+            f"draft version {version.version_no} was already published to {channel} as "
+            f"message {plan.already_published.message_id}. Nothing was sent."
+        )
+    if plan.unresolved is not None:
+        raise PublicationOutcomeUncertainError(
+            f"an earlier attempt to publish this version to {channel} ended with an "
+            "unknown outcome, so it may already be posted. Check the channel and resolve "
+            f"publication {plan.unresolved.id} before trying again."
+        )
+
+    # The last check before anything leaves the machine, against live state.
+    verify_publication(connection, plan.authorization)
+
+    bundle = plan.bundle_plan
+    if bundle is None:  # pragma: no cover - prepare_publication always builds one
+        raise ValueError("a bundle publication needs a plan")
+
+    root = media_root or Path("media")
+    already = components.succeeded(version.id)
+    unknown = components.uncertain(version.id)
+    if unknown:
+        raise PublicationOutcomeUncertainError(
+            f"an earlier attempt left {', '.join(sorted(c.value for c in unknown))} in an "
+            "unknown state; this bundle may already be partly published. Check the channel."
+        )
+
+    main_step = bundle.step_for(Component.MAIN)
+    if main_step is None:  # pragma: no cover - every plan has a main message
+        raise ValueError("a bundle plan must contain a main message")
+
+    decision_id = plan.authorization.decision_id
+    attempt_no = publications.next_attempt_no(version.id, channel)
+
+    if Component.MAIN in already:
+        # A resume. The post is on the channel; only the missing parts are attempted,
+        # and the existing publications row is the one they belong to.
+        publication = publications.successful_for_version(version.id, channel)
+        if publication is None:  # pragma: no cover - a succeeded MAIN implies a row
+            raise PublicationOutcomeUncertainError(
+                "the main message is recorded as sent but the publication row is missing; "
+                "resolve this by hand rather than sending anything"
+            )
+    else:
+        with transaction(connection):
+            drafts.set_status(plan.draft.id, DraftStatus.PUBLISHING)
+
+        logger.info(
+            "sending bundle to telegram",
+            extra={
+                "draft_id": str(plan.draft.id),
+                "draft_version_id": str(version.id),
+                "channel": channel,
+                "components": len(bundle.steps),
+                "attempt": attempt_no,
+            },
+        )
+
+        try:
+            outcome = run_step(client, main_step, channel, root, None)
+        except PublicationOutcomeUncertainError as exc:
+            _record(
+                publications,
+                plan,
+                decision_id=decision_id,
+                status=PublicationStatus.UNCERTAIN,
+                attempt_no=attempt_no,
+                failure_reason=redact(str(exc)),
+            )
+            logger.error("bundle main message outcome unknown", extra={"channel": channel})
+            raise
+        except Exception as exc:
+            _record(
+                publications,
+                plan,
+                decision_id=decision_id,
+                status=PublicationStatus.FAILED,
+                attempt_no=attempt_no,
+                failure_reason=redact(str(exc)),
+            )
+            with transaction(connection):
+                drafts.set_status(plan.draft.id, DraftStatus.PUBLISH_FAILED)
+                drafts.set_status(plan.draft.id, DraftStatus.APPROVED)
+            logger.error("bundle main message failed", extra={"channel": channel})
+            raise
+
+        published_at = now_utc()
+        with transaction(connection):
+            publication = _record(
+                publications,
+                plan,
+                decision_id=decision_id,
+                status=PublicationStatus.SUCCEEDED,
+                attempt_no=attempt_no,
+                message_id=outcome.message_id,
+                chat_id=outcome.chat_id,
+                published_at=published_at,
+            )
+            components.add(
+                publication_id=publication.id,
+                draft_id=plan.draft.id,
+                draft_version_id=version.id,
+                outcome=outcome,
+            )
+
+    # Everything else. execute() re-reads the component history, so the main message is
+    # skipped rather than repeated, and a failure here leaves the post standing.
+    try:
+        execute(
+            connection,
+            client,
+            bundle,
+            version,
+            publication_id=publication.id,
+            draft_id=plan.draft.id,
+            channel=channel,
+            discussion_chat_id=plan.discussion_chat_id,
+            media_root=root,
+        )
+    except (PublicationOutcomeUncertainError, Exception) as exc:
+        # The post itself is out and recorded. A missing image or comment is a partial
+        # publication, not a failed one, and re-sending the post to fix it would be the
+        # one unrecoverable mistake available here.
+        logger.error(
+            "bundle partially published",
+            extra={
+                "draft_id": str(plan.draft.id),
+                "channel": channel,
+                "error": type(exc).__name__,
+            },
+        )
+        with transaction(connection):
+            if drafts.get(plan.draft.id).status is DraftStatus.PUBLISHING:
+                drafts.set_status(plan.draft.id, DraftStatus.PUBLISHED)
+        raise
+
+    with transaction(connection):
+        if drafts.get(plan.draft.id).status is DraftStatus.PUBLISHING:
+            drafts.set_status(plan.draft.id, DraftStatus.PUBLISHED)
+
+    logger.info(
+        "bundle published",
+        extra={
+            "draft_id": str(plan.draft.id),
+            "draft_version_id": str(version.id),
+            "channel": channel,
+            "message_id": publication.message_id,
+        },
+    )
+    return publication

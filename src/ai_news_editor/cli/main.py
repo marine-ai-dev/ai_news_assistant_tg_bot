@@ -20,6 +20,7 @@ from ai_news_editor.cli.content import app as content_app
 from ai_news_editor.cli.draft import app as draft_app
 from ai_news_editor.cli.editorial import app as editorial_app
 from ai_news_editor.cli.publish import publication_app, publish, telegram_app
+from ai_news_editor.cli.queue import queue_app, scheduler_app
 from ai_news_editor.cli.review import app as review_app
 from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
@@ -50,6 +51,8 @@ app.add_typer(draft_app)
 app.add_typer(content_app)
 app.add_typer(review_app)
 app.add_typer(publication_app)
+app.add_typer(queue_app)
+app.add_typer(scheduler_app)
 app.add_typer(telegram_app)
 # A plain command, not a group: "publish" takes one draft id and nothing else, and a
 # Typer group would treat that id as a subcommand name.

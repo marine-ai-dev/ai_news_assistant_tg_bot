@@ -448,3 +448,56 @@ class ResourceType(StrEnum):
 EVIDENCE_REQUIRED_TYPES: frozenset[ContentType] = frozenset(
     {ContentType.PROMPT, ContentType.TESTED_USE_CASE}
 )
+
+
+class QueueStatus(StrEnum):
+    """Where a scheduled publication stands.
+
+    Deliberately small, and deliberately separate from ``DraftStatus``. A draft's status
+    says what the editorial process has decided about it; this says what the scheduler
+    is doing about a decision already made. Overloading one onto the other would mean a
+    cancelled schedule looked like a withdrawn approval, which it is not.
+
+    Three of these end the item's life (PUBLISHED, CANCELLED, INVALIDATED). Four ask a
+    human to look (STALE_REVIEW_REQUIRED, HOLD_FOR_REVIEW, FAILED, UNCERTAIN), and the
+    scheduler never resolves any of them by itself.
+    """
+
+    #: Waiting for its time.
+    SCHEDULED = "SCHEDULED"
+    #: A worker holds the lease and is publishing it now.
+    PROCESSING = "PROCESSING"
+    #: It went out.
+    PUBLISHED = "PUBLISHED"
+    #: The owner withdrew it. The approval is untouched and it can be scheduled again.
+    CANCELLED = "CANCELLED"
+    #: What it pointed at changed underneath it — the draft was edited, or the approval
+    #: stopped being valid. It can never publish; a new approval and a new schedule can.
+    INVALIDATED = "INVALIDATED"
+    #: The content aged past the window for its type. An editorial judgement, so a human
+    #: makes it: the scheduler will not extend an approval by publishing anyway.
+    STALE_REVIEW_REQUIRED = "STALE_REVIEW_REQUIRED"
+    #: A precondition failed at publication time — a missing image, an unresolved
+    #: earlier attempt. Operational rather than editorial, and still not auto-resolved.
+    HOLD_FOR_REVIEW = "HOLD_FOR_REVIEW"
+    #: Telegram definitely refused it. Nothing is on the channel.
+    FAILED = "FAILED"
+    #: The send may or may not have landed. Never retried automatically; duplicates on a
+    #: channel are visible to readers and cannot be undone.
+    UNCERTAIN = "UNCERTAIN"
+
+
+#: Statuses a queue item never leaves.
+TERMINAL_QUEUE_STATUSES: frozenset[QueueStatus] = frozenset(
+    {QueueStatus.PUBLISHED, QueueStatus.CANCELLED, QueueStatus.INVALIDATED}
+)
+
+#: Statuses that mean the scheduler has stopped and a human has to decide what happens.
+ATTENTION_QUEUE_STATUSES: frozenset[QueueStatus] = frozenset(
+    {
+        QueueStatus.STALE_REVIEW_REQUIRED,
+        QueueStatus.HOLD_FOR_REVIEW,
+        QueueStatus.FAILED,
+        QueueStatus.UNCERTAIN,
+    }
+)

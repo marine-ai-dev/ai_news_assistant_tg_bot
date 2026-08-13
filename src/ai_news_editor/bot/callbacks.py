@@ -45,6 +45,20 @@ class Action(StrEnum):
     CANCEL = "x"
     REFRESH = "f"
 
+    # Phase 9. Scheduling is deliberately several taps: the preset chooses a time, and
+    # a separate confirmation creates the queue item. One accidental tap schedules
+    # nothing.
+    SCHEDULE = "sc"
+    SCHEDULE_MORNING = "sm"
+    SCHEDULE_AFTERNOON = "sa"
+    SCHEDULE_EVENING = "se"
+    SCHEDULE_CUSTOM = "su"
+    SCHEDULE_CONFIRM = "sk"
+    QUEUE_SHOW = "qs"
+    QUEUE_CANCEL = "qc"
+    QUEUE_CANCEL_CONFIRM = "qk"
+    QUEUE_RESCHEDULE = "qr"
+
 
 @dataclass(frozen=True, slots=True)
 class Callback:

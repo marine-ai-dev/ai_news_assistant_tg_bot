@@ -2045,3 +2045,59 @@ which is the correct outcome and was verified against live data.
 `getMe`, `getChat`, `getChatMember` and discussion-group discovery all ran against the
 real API. Nothing was sent. Message id 2 and all eighteen stored content hashes are
 unchanged.
+
+## 34. Phase 9 — publication queue and local scheduler
+
+The first place in this project where a machine sends a post with nobody at the
+keyboard. Everything below exists because of that one sentence.
+
+**New entity, deliberately separate from the draft lifecycle.** `publication_queue` in
+migration 013, plus an append-only `publication_queue_events` log. A draft's status says
+what the editorial process decided; a queue item says what the owner wants to happen at
+a particular minute. Overloading one onto the other would make a cancelled schedule look
+like a withdrawn approval.
+
+**The central design decision: a queue item is not permission.** It binds to an exact
+`draft_version_id` and the approved content hash, and it is a *request to re-ask the
+publication question* at a given moment — not a permit issued in advance. Every check
+that guards `ai-news publish` runs again immediately before the send, through the same
+`prepare_publication` the interactive path calls, so the two cannot drift apart.
+
+**Two checks that only exist because time passes.** Freshness, measured from approval
+and configured per content type (NEWS 36 h, PROMPT and TESTED_USE_CASE 30 d, EXPLAINER
+and RESOURCE 365 d); and overdue tolerance, because a Mac that slept through Thursday
+morning must not wake and publish yesterday's news. Both answer with a hold. Both sets
+of numbers live in `scheduling/freshness.py` and are documented as editorial defaults
+rather than measured optima — there is no engagement data, and inventing some would be
+worse than saying so.
+
+**Europe/Kyiv, stored as UTC.** `zoneinfo`, no dependency. Nonexistent and ambiguous
+local times — the two nights a year the clocks move — are refused rather than resolved,
+including for the convenience presets. Guessing would publish an hour off, once a year,
+in a way nobody would ever find.
+
+**Worker coordination is one conditional UPDATE.** Two schedulers on one Mac is a
+Tuesday, not a hypothetical. SQLite serialises the writers; the loser matches zero rows
+and says nothing to Telegram. Nothing is held in Python memory, so the guarantee
+survives a process that never learns it lost. An expired lease returns an item for
+reassessment from scratch — recovery grants no permission to send, and a draft the dead
+worker had already moved to PUBLISHING is held for a human.
+
+**Sending is not reimplemented.** `publishing/service.publish_bundle` was added and is
+shared by the CLI and the scheduler: the main message is sent first and the publications
+row written from its outcome (that table is append-only, so it cannot be written
+provisionally), then `rich.execute` handles every remaining component and skips anything
+already recorded as succeeded. The main post is therefore never sent twice, on any path.
+
+**Telegram scheduling UI**, owner-only, on approved content only. Presets choose a time;
+a separate confirmation creates the row. The chosen time lives in the in-memory session,
+never in `callback_data` — a timestamp that travelled to a client and back is a time the
+bot did not choose.
+
+Two bugs were found by tests written for this phase and fixed: a fresh clone following
+the README could not start (an empty `.env.example` value failed integer parsing), and a
+malformed typed date raised an unhandled `ValueError` where a Telegram handler needed a
+sentence.
+
+Deferred to Phase 10: the editorial calendar, content balance, source and tool
+diversity, and NEWCOMER balance.

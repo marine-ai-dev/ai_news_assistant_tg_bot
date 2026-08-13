@@ -14,6 +14,7 @@ supplied.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Self
 from uuid import UUID, uuid4
 
@@ -22,6 +23,8 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validat
 from ai_news_editor.domain.clock import UtcDatetime, now_utc
 from ai_news_editor.domain.content import compute_content_hash, compute_editorial_fingerprint
 from ai_news_editor.domain.enums import (
+    ATTENTION_QUEUE_STATUSES,
+    TERMINAL_QUEUE_STATUSES,
     ArticleStatus,
     AudienceTier,
     Category,
@@ -42,6 +45,7 @@ from ai_news_editor.domain.enums import (
     PromptRepresentation,
     PromptTopic,
     PublicationStatus,
+    QueueStatus,
     ResourceType,
     ReviewAction,
     SourceKind,
@@ -814,3 +818,69 @@ class ContentItem(ImmutableDomainModel):
         if self.series_name is None or self.series_order is None:
             return None
         return f"{self.series_name} · {self.series_order}"
+
+
+class QueueItem(DomainModel):
+    """One deliberate decision to publish an exact approved version at an exact time.
+
+    Bound to ``draft_version_id`` rather than ``draft_id``, and that is the whole
+    design. "Publish this draft on Thursday" would mean publishing whatever the draft
+    says on Thursday — including edits nobody approved. "Publish *this version* on
+    Thursday" can only ever publish what a human actually read, and becomes unpublishable
+    the moment that version stops being current.
+
+    ``content_hash`` repeats the guarantee independently of the version row, the same
+    way a review decision and a publication both carry it.
+    """
+
+    id: UUID = Field(default_factory=uuid4)
+    draft_id: UUID
+    draft_version_id: UUID
+    #: The approval this scheduling rests on.
+    review_decision_id: UUID
+    content_hash: NonEmptyStr
+    channel: NonEmptyStr
+
+    #: Canonical UTC. Never a naive datetime, and never the machine's local time.
+    scheduled_for: UtcDatetime
+    #: The timezone the owner scheduled in, so the queue reads back the way it was typed.
+    display_timezone: str = "Europe/Kyiv"
+
+    status: QueueStatus = QueueStatus.SCHEDULED
+    #: Why the scheduler stopped, in words meant for the owner rather than a log.
+    hold_reason: str | None = None
+
+    #: Worker coordination. A claim without an expiry would survive a crashed process.
+    claimed_by: str | None = None
+    claimed_at: UtcDatetime | None = None
+    lease_expires_at: UtcDatetime | None = None
+
+    publication_id: UUID | None = None
+
+    queued_at: UtcDatetime = Field(default_factory=now_utc)
+    last_checked_at: UtcDatetime | None = None
+    updated_at: UtcDatetime = Field(default_factory=now_utc)
+
+    @model_validator(mode="after")
+    def _a_stopped_item_says_why(self) -> Self:
+        """A held item a human cannot understand is a held item nobody resolves."""
+        needs_reason = {
+            QueueStatus.INVALIDATED,
+            QueueStatus.STALE_REVIEW_REQUIRED,
+            QueueStatus.HOLD_FOR_REVIEW,
+        }
+        if self.status in needs_reason and not (self.hold_reason or "").strip():
+            raise ValueError(f"a {self.status.value} queue item must record why")
+        return self
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in TERMINAL_QUEUE_STATUSES
+
+    @property
+    def needs_attention(self) -> bool:
+        return self.status in ATTENTION_QUEUE_STATUSES
+
+    def is_due(self, now: datetime) -> bool:
+        """Due is computed, never stored — a stored DUE would go stale by definition."""
+        return self.status is QueueStatus.SCHEDULED and now >= self.scheduled_for

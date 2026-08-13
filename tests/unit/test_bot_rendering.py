@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -145,7 +146,19 @@ class TestSession:
         from dataclasses import fields
 
         names = {f.name for f in fields(Session)}
-        assert names == {"editing", "skipped"}
+        assert names == {"editing", "skipped", "scheduling", "awaiting_custom_time"}
+
+        # Every one of them is ephemeral UI intent. None is consulted in place of a
+        # database check, and the scheduling ones are the newest temptation: an
+        # unconfirmed time held here is not a schedule, and the version it names is
+        # re-read and re-compared before anything is written.
+        session = Session()
+        session.begin_schedule(
+            DRAFT_ID, DRAFT_ID, 1, datetime(2026, 8, 13, 7, tzinfo=UTC), "Europe/Kyiv"
+        )
+        assert session.active_schedule() is not None
+        session.end_schedule()
+        assert session.active_schedule() is None
 
 
 class TestCardDetail:

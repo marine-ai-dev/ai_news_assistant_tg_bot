@@ -171,6 +171,89 @@ flowchart LR
 
 ---
 
+## 📅 Scheduling: intent kept apart from editorial state
+
+A draft has an editorial life — written, reviewed, approved, published. Wanting it to go
+out on Thursday at ten is **not a step in that life**. It is a separate decision about an
+already-approved thing, which the owner can change or withdraw without touching the
+approval. So it gets its own row rather than another draft status.
+
+```mermaid
+flowchart TD
+    A["Draft / DraftVersion"] --> B["✅ APPROVED"]
+    B --> C["📅 PublicationQueueItem<br/><i>bound to the exact version + hash</i>"]
+    C --> D{"⏰ due?"}
+    D -->|"not yet"| C
+    D -->|"yes"| E["🔒 atomic claim<br/><i>one worker wins</i>"]
+    E --> F{"🛡 re-verify everything"}
+    F -->|"all still true"| G["📨 rich publication service"]
+    F -->|"edited"| H["INVALIDATED"]
+    F -->|"aged out"| I["STALE_REVIEW_REQUIRED"]
+    F -->|"missing file · unresolved attempt"| J["HOLD_FOR_REVIEW"]
+    G --> K["📣 Telegram"]
+    G -.->|"lost response"| L["UNCERTAIN — never retried"]
+
+    style F fill:#8957e5,color:#fff
+    style H fill:#d29922,color:#000
+    style I fill:#d29922,color:#000
+    style J fill:#d29922,color:#000
+    style L fill:#da3633,color:#fff
+```
+
+Every amber and red state ends in a human's hands. The scheduler resolves none of them.
+
+### The status model
+
+Nine states, and no more, because a scheduler with dozens of states is one nobody can
+reason about:
+
+| Status | Meaning |
+|---|---|
+| `SCHEDULED` | waiting for its time |
+| `PROCESSING` | a worker holds the lease and is publishing it now |
+| `PUBLISHED` | it went out |
+| `CANCELLED` | the owner withdrew it; the approval is untouched |
+| `INVALIDATED` | what it pointed at changed; it can never publish |
+| `STALE_REVIEW_REQUIRED` | the content aged past its window — an editorial judgement |
+| `HOLD_FOR_REVIEW` | a precondition failed — operational rather than editorial |
+| `FAILED` | Telegram definitely refused; nothing is on the channel |
+| `UNCERTAIN` | the outcome is unknown; never retried by a machine |
+
+`DUE` is **computed from the clock**, never stored — a stored `DUE` goes stale by
+definition.
+
+### Why the exact-version binding is the whole design
+
+A queue row stores `draft_version_id`, not just `draft_id`. "Publish this draft on
+Thursday" would mean publishing whatever the draft says on Thursday, including edits
+nobody approved. "Publish *this version* on Thursday" can only ever publish what a human
+actually read — and becomes unpublishable the moment that version stops being current.
+
+Appending a new version invalidates any waiting schedule **in the same transaction that
+writes the version**. That placement is the point: the guarantee must not depend on
+remembering to call a service afterwards.
+
+### Worker coordination
+
+```mermaid
+sequenceDiagram
+    participant A as ⚙️ worker A
+    participant B as ⚙️ worker B
+    participant DB as 🗄 SQLite
+
+    A->>DB: UPDATE … SET status='PROCESSING' WHERE status='SCHEDULED' AND due
+    B->>DB: UPDATE … SET status='PROCESSING' WHERE status='SCHEDULED' AND due
+    DB-->>A: 1 row
+    DB-->>B: 0 rows
+    Note over B: not an error — it simply moves on,<br/>and says nothing to Telegram
+    A->>DB: publish, record every component
+```
+
+One conditional UPDATE, and the condition *is* the safety property. There is no window
+between deciding and claiming, because they are the same statement.
+
+---
+
 ## 🗄 Storage
 
 Plain `sqlite3` from the standard library, with hand-written ordered SQL migrations and

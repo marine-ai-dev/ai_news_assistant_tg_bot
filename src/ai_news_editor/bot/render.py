@@ -321,3 +321,150 @@ def denied() -> str:
 
 def _button(text: str, action: Action, draft_id: Any, version_no: int) -> dict[str, str]:
     return {"text": text, "callback_data": encode(action, draft_id, version_no)}
+
+
+# -- scheduling (Phase 9) ----------------------------------------------------
+#
+# Everything below concerns approved content only. Nothing here can approve anything,
+# and there is deliberately no "approve and schedule" button: the two decisions are
+# separate, and combining them would let one tap do what two are meant to.
+
+
+def approved_card(draft: Any, version: Any, *, scheduled_for: str | None = None) -> str:
+    """An approved post, offered for scheduling."""
+    lines = [
+        f"*{version.title}*",
+        "",
+        f"✅ Схвалено · {draft.content_type.value}",
+    ]
+    if scheduled_for:
+        lines.append(f"📅 Заплановано: *{scheduled_for}*")
+    else:
+        lines.append("_Ще не заплановано._")
+    lines += [
+        _SEPARATOR,
+        _shorten(version.body, 400),
+    ]
+    return "\n".join(lines)
+
+
+def schedule_keyboard(draft: Any, version_no: int, *, scheduled: bool = False) -> dict[str, Any]:
+    """Offered only for approved content.
+
+    The three presets are convenience, nothing more. They are named after parts of the
+    day and not after engagement, because this project has no engagement data and
+    inventing some in a button label would be a lie the owner then plans around.
+    """
+    if scheduled:
+        return {
+            "inline_keyboard": [
+                [
+                    _button("🕐 Інший час", Action.QUEUE_RESCHEDULE, draft.id, version_no),
+                    _button("🗑 Зняти", Action.QUEUE_CANCEL, draft.id, version_no),
+                ]
+            ]
+        }
+    return {
+        "inline_keyboard": [
+            [_button("🌅 Завтра вранці", Action.SCHEDULE_MORNING, draft.id, version_no)],
+            [_button("☀️ Завтра вдень", Action.SCHEDULE_AFTERNOON, draft.id, version_no)],
+            [_button("🌙 Завтра ввечері", Action.SCHEDULE_EVENING, draft.id, version_no)],
+            [_button("🗓 Обрати дату й час", Action.SCHEDULE_CUSTOM, draft.id, version_no)],
+        ]
+    }
+
+
+def schedule_confirmation(
+    title: str, when_line: str, warnings: list[str] | None = None
+) -> str:
+    """The second tap. A time is never scheduled by the tap that chose it."""
+    lines = [
+        "📅 *Запланувати цей допис?*",
+        "",
+        _shorten(title, 120),
+        "",
+        f"*{when_line}*",
+    ]
+    for warning in warnings or []:
+        lines += ["", f"⚠️ {warning}"]
+    lines += [
+        "",
+        "_Перед публікацією бот ще раз перевірить схвалення, свіжість і файли. "
+        "Якщо щось зміниться — допис не вийде, а чекатиме на вас._",
+    ]
+    return "\n".join(lines)
+
+
+def schedule_confirm_keyboard(draft: Any, version_no: int) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [_button("✅ Підтвердити", Action.SCHEDULE_CONFIRM, draft.id, version_no)],
+            [_button("↩ Скасувати", Action.CANCEL, draft.id, version_no)],
+        ]
+    }
+
+
+def ask_for_time(title: str) -> str:
+    return "\n".join(
+        [
+            "🗓 *Коли опублікувати?*",
+            "",
+            _shorten(title, 120),
+            "",
+            "Напишіть дату й час, наприклад:",
+            "`13.08 14:30`",
+            "",
+            "_Час за Києвом. Я покажу, що зрозумів, і спитаю підтвердження._",
+        ]
+    )
+
+
+def queue_view(rows: list[tuple[str, str, str]]) -> str:
+    """The upcoming schedule: when, an icon for the kind, and the headline."""
+    if not rows:
+        return "📅 *Нічого не заплановано.*\n\n_Схвалені дописи можна запланувати через /approved._"
+    lines = ["📅 *Заплановані дописи*", ""]
+    for when, icon, title in rows:
+        lines.append(f"`{when}` {icon} {_shorten(title, 40)}")
+    lines += ["", "_Час за Києвом._"]
+    return "\n".join(lines)
+
+
+def queue_item_card(when_line: str, title: str, status: str, reason: str | None) -> str:
+    lines = [
+        f"📅 *{when_line}*",
+        "",
+        _shorten(title, 200),
+        "",
+        f"Статус: `{status}`",
+    ]
+    if reason:
+        lines += ["", f"⚠️ {reason}"]
+    return "\n".join(lines)
+
+
+def cancel_schedule_confirmation(when_line: str, title: str) -> str:
+    return "\n".join(
+        [
+            "🗑 *Зняти з розкладу?*",
+            "",
+            _shorten(title, 120),
+            f"_{when_line}_",
+            "",
+            "_Схвалення залишиться чинним — допис просто не вийде в цей час._",
+        ]
+    )
+
+
+def cancel_schedule_keyboard(draft: Any, version_no: int) -> dict[str, Any]:
+    return {
+        "inline_keyboard": [
+            [_button("🗑 Так, зняти", Action.QUEUE_CANCEL_CONFIRM, draft.id, version_no)],
+            [_button("↩ Ні", Action.CANCEL, draft.id, version_no)],
+        ]
+    }
+
+
+def _shorten(text: str, limit: int) -> str:
+    collapsed = " ".join(text.split())
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"

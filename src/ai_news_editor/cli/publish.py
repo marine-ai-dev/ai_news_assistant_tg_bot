@@ -251,6 +251,8 @@ def telegram_review_bot() -> None:
                 connection=connection,
                 owner_id=settings.telegram_owner_user_id,
                 session=Session(),
+                channel=settings.telegram_channel,
+                media_root=settings.resolved_media_dir,
             )
             try:
                 for _update_id in poll(bot, offset=offset):

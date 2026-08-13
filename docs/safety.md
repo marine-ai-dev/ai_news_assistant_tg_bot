@@ -191,9 +191,40 @@ history, HTTP error messages and generated documentation. A test asserts each of
 
 ---
 
+## 14. 📅 Scheduling never becomes permission
+
+Phase 9 introduced the only place where a machine sends a post with nobody at the
+keyboard, so it introduced matching constraints:
+
+- **No approval, no queue.** `queue add` runs the full publication check *before* writing
+  a row — approval, evidence, provenance, files, duplicates. Creating a bad queue row and
+  hoping the scheduler catches it later would mean telling the owner at 03:00 what could
+  have been said at the keyboard.
+- **No explicit scheduling, no publication.** The scheduler never inserts a queue item.
+  An approved draft sitting there is not an instruction to publish it.
+- **An approval does not travel forward in time.** Every check is re-run immediately
+  before the send. A queue item is a request to re-ask the question, not a permit.
+- **Editing invalidates the schedule**, in the same transaction that appends the version.
+  The item is never retargeted at the new version — that would publish words nobody
+  approved at a time nobody chose.
+- **Freshness is a hold, not an override.** Past its window, a post waits for a person.
+  The scheduler will not extend an approval by publishing anyway.
+- **Overdue is a hold too.** A Mac that slept through Thursday morning does not wake up
+  and blast yesterday's news at readers.
+- **One worker per item**, enforced by a single conditional UPDATE in SQLite rather than
+  by anything held in Python memory.
+- **Crash recovery grants nothing.** An expired lease returns the item for reassessment.
+  If the dead worker had already begun publishing, the draft has no valid approval and
+  the item is held for a human.
+- **The scheduler is deterministic infrastructure.** It does not browse, does not run a
+  model, does not judge quality, and does not choose content. Given the same database and
+  the same clock, it makes the same decision every time.
+
+---
+
 ## 🧪 How this is verified
 
 The `tests/safety/` suite exists specifically for these properties, and is marked so it
 can never be skipped by accident. Coverage of `publishing/gate.py` — the module that
 decides whether anything may be published — is held at **100%**, as is the rich
-publication path and the review bot.
+publication path. The queue, the scheduler and the review bot are all held above 90%.

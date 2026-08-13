@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,6 +32,7 @@ from ai_news_editor.domain.enums import (
     EvidenceStatus,
     PostFormat,
     PromptTopic,
+    QueueStatus,
     ReviewAction,
     SourceTier,
 )
@@ -48,6 +50,7 @@ from ai_news_editor.storage.repositories import (
     DraftRepository,
     PublicationRepository,
 )
+from ai_news_editor.storage.repositories.publication_queue import PublicationQueueRepository
 from tests.conftest import DRAFT_CONTENT
 
 pytestmark = pytest.mark.safety
@@ -116,6 +119,8 @@ def bot(transport: RecordingApi, connection: sqlite3.Connection):  # type: ignor
             connection=connection,
             owner_id=OWNER,
             session=Session(),
+            channel=CHANNEL,
+            media_root=Path("media"),
         )
 
 
@@ -1030,3 +1035,378 @@ class TestLongPollTimeouts:
         from ai_news_editor.publishing.telegram import DEFAULT_TIMEOUT_SECONDS
 
         assert seen[0] == DEFAULT_TIMEOUT_SECONDS
+
+
+class TestSchedulingFromTelegram:
+    """Phase 9. A phone can schedule an approved post — and only an approved post.
+
+    The review card has no schedule button, and there is no "approve and schedule". The
+    two decisions stay two decisions: one says these words are right, the other says
+    Thursday at ten, and combining them would let one tap do what two are meant to.
+    """
+
+    def _approved(self, connection: sqlite3.Connection, seeded_article, drafts):  # type: ignore[no-untyped-def]
+        draft, version = news_draft(seeded_article, drafts)
+        approve_draft(connection, draft.id, actor="owner:test", expected_version_id=version.id)
+        return drafts.get(draft.id), drafts.current_version(draft.id)
+
+    def test_the_review_card_offers_no_scheduling(
+        self, bot: ReviewBot, transport: RecordingApi, seeded_article, drafts
+    ) -> None:
+        """Pending content is not schedulable, so it must not look schedulable."""
+        news_draft(seeded_article, drafts)
+        bot.handle(message("/review"))
+
+        buttons = json.dumps(transport.of("sendMessage"), ensure_ascii=False)
+        for schedule_action in (Action.SCHEDULE, Action.SCHEDULE_MORNING, Action.SCHEDULE_CONFIRM):
+            assert f'"{schedule_action.value}:' not in buttons
+
+    def test_approved_content_offers_presets(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        self._approved(connection, seeded_article, drafts)
+        bot.handle(message("/approved"))
+
+        buttons = json.dumps(transport.of("sendMessage"), ensure_ascii=False)
+        assert Action.SCHEDULE_MORNING.value in buttons
+        assert Action.SCHEDULE_CUSTOM.value in buttons
+        # The presets say when, not that when is good for you.
+        assert "engagement" not in buttons.lower()
+        assert "найкращ" not in buttons.lower()
+
+    def test_a_preset_asks_before_it_schedules(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """One accidental tap must never put a post on the calendar."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert "Запланувати цей допис?" in transport.texts
+
+    def test_confirming_creates_exactly_one_queue_item(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        items = PublicationQueueRepository(connection).list_all()
+        assert len(items) == 1
+        assert items[0].status is QueueStatus.SCHEDULED
+        assert items[0].draft_version_id == version.id
+        assert transport.channel_sends == []
+
+    def test_a_confirmation_without_a_chosen_time_does_nothing(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """The time lives in the session, so a replayed confirm button schedules nothing."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_a_stale_card_cannot_schedule(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """A tap on a card rendered before an edit must not schedule the new text."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        drafts.append_version(
+            draft.id, **{**DRAFT_CONTENT, "title": "🆕 Інший заголовок"}  # type: ignore[arg-type]
+        )
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_a_typed_time_is_echoed_back_before_it_is_accepted(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """What the owner typed and what the bot understood are two different things."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        bot.handle(message("13.08 14:30"))
+
+        assert "14:30" in transport.texts
+        assert "Europe/Kyiv" in transport.texts
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_unreadable_typed_input_schedules_nothing(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        bot.handle(message("колись у четвер"))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert "13.08 14:30" in transport.texts  # the format is shown again
+
+    def test_cancelling_a_schedule_leaves_the_approval_intact(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+        bot.handle(tap(Action.QUEUE_CANCEL, draft.id, version.version_no))
+        bot.handle(tap(Action.QUEUE_CANCEL_CONFIRM, draft.id, version.version_no))
+
+        items = PublicationQueueRepository(connection).list_all()
+        assert [i.status for i in items] == [QueueStatus.CANCELLED]
+        assert drafts.get(draft.id).status is DraftStatus.APPROVED
+
+    def test_pending_content_cannot_be_scheduled_by_callback(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """Forging the callback of an unapproved draft schedules nothing."""
+        draft, version = news_draft(seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert drafts.get(draft.id).status is DraftStatus.PENDING_REVIEW
+
+
+class TestSchedulingIsOwnerOnly:
+    """Every scheduling surface refuses a stranger, and tells them nothing."""
+
+    def _approved(self, connection: sqlite3.Connection, seeded_article, drafts):  # type: ignore[no-untyped-def]
+        draft, version = news_draft(seeded_article, drafts)
+        approve_draft(connection, draft.id, actor="owner:test", expected_version_id=version.id)
+        return drafts.get(draft.id), drafts.current_version(draft.id)
+
+    @pytest.mark.parametrize("command", ["/queue", "/approved", "/schedule"])
+    def test_a_stranger_sees_no_schedule(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts,
+        command: str,
+    ) -> None:
+        draft, _version = self._approved(connection, seeded_article, drafts)
+        bot.handle(message(command, user_id=STRANGER))
+
+        assert "Цей бот приватний" in transport.texts
+        assert str(draft.id) not in transport.texts
+        assert "Заплановані" not in transport.texts
+
+    @pytest.mark.parametrize(
+        "action",
+        [
+            Action.SCHEDULE,
+            Action.SCHEDULE_MORNING,
+            Action.SCHEDULE_CONFIRM,
+            Action.QUEUE_CANCEL_CONFIRM,
+            Action.QUEUE_RESCHEDULE,
+        ],
+    )
+    def test_a_stranger_cannot_touch_the_queue(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts,
+        action: Action,
+    ) -> None:
+        """Valid-looking callback data from the wrong account changes nothing."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(action, draft.id, version.version_no, user_id=STRANGER))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert transport.channel_sends == []
+
+    def test_a_stranger_cannot_cancel_the_owners_schedule(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        bot.handle(tap(Action.QUEUE_CANCEL_CONFIRM, draft.id, version.version_no,
+                            user_id=STRANGER))
+
+        items = PublicationQueueRepository(connection).list_all()
+        assert [i.status for i in items] == [QueueStatus.SCHEDULED]
+
+    def test_an_old_callback_fails_safely(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """Unparseable button data is answered politely and acted on not at all."""
+        bot.handle(
+            {
+                "update_id": 1,
+                "callback_query": {
+                    "id": "cb", "from": {"id": OWNER},
+                    "message": {"message_id": 5, "chat": {"id": OWNER_CHAT}},
+                    "data": "sk:not-a-draft:banana",
+                },
+            }
+        )
+        assert PublicationQueueRepository(connection).list_all() == []
+
+
+class TestSchedulingUiPaths:
+    """The rest of the scheduling surface: the queue view, presets, and every refusal.
+
+    These are the branches that only fire when something is slightly wrong — a channel
+    that is not configured, a preset chosen for a draft that has just been edited, a
+    typed date that is not a date. Each one must answer the tap and change nothing.
+    """
+
+    def _approved(self, connection: sqlite3.Connection, seeded_article, drafts):  # type: ignore[no-untyped-def]
+        draft, version = news_draft(seeded_article, drafts)
+        approve_draft(connection, draft.id, actor="owner:test", expected_version_id=version.id)
+        return drafts.get(draft.id), drafts.current_version(draft.id)
+
+    def test_the_queue_view_is_empty_until_something_is_scheduled(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        self._approved(connection, seeded_article, drafts)
+        bot.handle(message("/queue"))
+        assert "Нічого не заплановано" in transport.texts
+
+    def test_the_queue_view_lists_what_is_scheduled(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_EVENING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        bot.handle(message("/queue"))
+        assert "Заплановані дописи" in transport.texts
+        assert "Київ" in transport.texts or "Час за Києвом" in transport.texts
+
+    def test_the_queue_can_be_opened_from_a_button_too(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.QUEUE_SHOW, draft.id, version.version_no))
+        assert "заплановано" in transport.texts.lower()
+
+    def test_approved_content_with_no_schedule_offers_the_picker(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE, draft.id, version.version_no))
+        buttons = json.dumps(transport.calls, ensure_ascii=False)
+        assert Action.SCHEDULE_AFTERNOON.value in buttons
+
+    def test_rescheduling_reopens_the_same_picker(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """Rescheduling replaces a time; it must never quietly add a second one."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+        bot.handle(tap(Action.QUEUE_RESCHEDULE, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_EVENING, draft.id, version.version_no))
+
+        assert "Запланувати цей допис?" in transport.texts
+        assert len(PublicationQueueRepository(connection).list_all()) == 1
+
+    @pytest.mark.parametrize(
+        "action",
+        [Action.SCHEDULE, Action.SCHEDULE_MORNING, Action.SCHEDULE_CUSTOM,
+         Action.SCHEDULE_CONFIRM],
+    )
+    def test_nothing_can_be_scheduled_without_a_configured_channel(
+        self, transport: RecordingApi, connection, seeded_article, drafts, action: Action
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        with TelegramClient(TOKEN, transport=transport) as client:
+            bot = ReviewBot(
+                api=BotApi(client), connection=connection, owner_id=OWNER,
+                session=Session(), channel=None, media_root=Path("media"),
+            )
+            bot.handle(tap(action, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_a_preset_on_an_edited_draft_schedules_nothing(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        drafts.append_version(
+            draft.id, **{**DRAFT_CONTENT, "title": "🆕 Інший"}  # type: ignore[arg-type]
+        )
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_asking_for_a_custom_time_on_an_edited_draft_does_nothing(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        drafts.append_version(
+            draft.id, **{**DRAFT_CONTENT, "title": "🆕 Інший"}  # type: ignore[arg-type]
+        )
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        assert "Коли опублікувати" not in transport.texts
+
+    def test_a_draft_edited_while_the_owner_types_a_date_is_not_scheduled(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        """The gap between "choose a time" and typing one is a real window."""
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        drafts.append_version(
+            draft.id, **{**DRAFT_CONTENT, "title": "🆕 Інший"}  # type: ignore[arg-type]
+        )
+        bot.handle(message("25.12 10:00"))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert "Розклад не створено" in transport.texts
+
+    def test_a_date_that_is_not_a_date_is_answered_not_crashed(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        bot.handle(message("32.13 99:99"))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+        assert "13.08 14:30" in transport.texts  # the format is offered again
+
+    def test_a_time_in_the_past_is_refused_with_a_readable_reason(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_CUSTOM, draft.id, version.version_no))
+        bot.handle(message("01.01.2020 10:00"))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_cancelling_something_that_is_not_scheduled_says_so(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.QUEUE_CANCEL, draft.id, version.version_no))
+        bot.handle(tap(Action.QUEUE_CANCEL_CONFIRM, draft.id, version.version_no))
+        assert PublicationQueueRepository(connection).list_all() == []
+
+    def test_cancelling_an_edited_draft_changes_nothing(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+        drafts.append_version(
+            draft.id, **{**DRAFT_CONTENT, "title": "🆕 Інший"}  # type: ignore[arg-type]
+        )
+        bot.handle(tap(Action.QUEUE_CANCEL_CONFIRM, draft.id, version.version_no))
+
+        # The edit already invalidated it; the stale tap did not do anything further.
+        statuses = [i.status for i in PublicationQueueRepository(connection).list_all()]
+        assert statuses == [QueueStatus.INVALIDATED]
+
+    def test_the_approved_list_says_so_when_there_is_nothing_approved(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        news_draft(seeded_article, drafts)  # pending, not approved
+        bot.handle(message("/approved"))
+        assert "Немає схвалених дописів" in transport.texts
+
+    def test_an_already_scheduled_post_shows_reschedule_and_remove(
+        self, bot: ReviewBot, transport: RecordingApi, connection, seeded_article, drafts
+    ) -> None:
+        draft, version = self._approved(connection, seeded_article, drafts)
+        bot.handle(tap(Action.SCHEDULE_MORNING, draft.id, version.version_no))
+        bot.handle(tap(Action.SCHEDULE_CONFIRM, draft.id, version.version_no))
+        transport.calls.clear()
+
+        bot.handle(message("/approved"))
+        buttons = json.dumps(transport.calls, ensure_ascii=False)
+        assert Action.QUEUE_RESCHEDULE.value in buttons
+        assert Action.QUEUE_CANCEL.value in buttons

@@ -12,8 +12,8 @@ engineers.
 </div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C663%20passing-2ea44f)](#-quality)
-[![Coverage](https://img.shields.io/badge/coverage-94%25-2ea44f)](#-quality)
+[![Tests](https://img.shields.io/badge/tests-1%2C834%20passing-2ea44f)](#-quality)
+[![Coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#-quality)
 [![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
 [![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
 
@@ -63,7 +63,12 @@ before a network call.
 | 🧩 **Partial-failure recovery** | The main post is *never* re-sent; retries fill only the gaps |
 | ❓ **UNCERTAIN-delivery protection** | An unknown outcome stops everything and calls a human |
 | 🤐 **Token redaction everywhere** | Logs, output, exceptions, database, fixtures — all scrubbed |
-| 🧪 **1,663 automated tests** | Including a safety suite that cannot be skipped by accident |
+| 📅 **Publication queue** | Schedule an exact approved version for an exact future moment |
+| ⏰ **Local scheduler** | A stdlib process that publishes only what the owner queued |
+| 🌍 **Europe/Kyiv scheduling** | UTC storage, channel-time display, DST refused rather than guessed |
+| 🥬 **Freshness policy** | Per content type — news ages in hours, an explainer in a year |
+| 😴 **Overdue safety** | A sleeping Mac never wakes up and blasts yesterday's news |
+| 🧪 **1,834 automated tests** | Including a safety suite that cannot be skipped by accident |
 
 ---
 
@@ -196,7 +201,7 @@ This is the part worth reading if you only read one thing.
 | 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
 | 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
 | 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
-| 🧪 Quality | **pytest** + **Ruff** | 1,663 tests; a safety suite that cannot be skipped |
+| 🧪 Quality | **pytest** + **Ruff** | 1,834 tests; a safety suite that cannot be skipped |
 
 **Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
 
@@ -325,12 +330,107 @@ taken back — which is why every guarantee in [safety.md](docs/safety.md) exist
 
 ---
 
+## 📅 Publication Queue & ⏰ Local Scheduler
+
+Approving a post and publishing it at 10:00 on Thursday are two different decisions, so
+they are two different acts. Approval says *these words are right*; scheduling says
+*then*. Neither implies the other, and neither can be done on the owner's behalf.
+
+```bash
+ai-news queue add <draft-id> --at "14.08 10:00"   # only an approved draft
+ai-news queue list                                 # what is scheduled, in Kyiv time
+ai-news queue show <queue-id>                      # one item, with its full history
+ai-news queue reschedule <queue-id> --at "14.08 18:00"
+ai-news queue cancel <queue-id>                    # the draft stays approved
+ai-news queue policy                               # the freshness windows in force
+ai-news scheduler once --dry-run                   # decide everything, send nothing
+ai-news scheduler run                              # the long-running local process
+```
+
+### 🔑 A queue item is not permission
+
+It is a **request to ask the question again** at a particular moment. Every check that
+guarded the publish command runs once more immediately before the send, plus two that
+only make sense once time has passed:
+
+| Checked again, right before sending | |
+|---|---|
+| 🔗 The exact approved version is still current | an edit invalidates the schedule |
+| 🎫 The approval is still the live one | never silently re-approved |
+| #️⃣ The bundle still hashes to what was scheduled | text, comment, media, footer |
+| 📑 Evidence and provenance still pass | approval cannot override a missing demo |
+| 🖼 Every required file still exists | a missing image holds, never half-publishes |
+| 🥬 The content is still fresh enough | see the policy below |
+| 😴 It is not *too* late | the Mac may have slept through the moment |
+| ♻️ No successful publication exists | publish exactly once, still |
+
+Any one failing stops the post and records a reason in the owner's words. **Nothing is
+ever resolved by the scheduler itself.**
+
+### 🥬 Freshness — how long an approval stays good
+
+An approved post sitting in a queue for three days is an approval ageing in public. How
+long "right" lasts depends entirely on what kind of post it is:
+
+| Type | Publishable within | May publish this late |
+|---|---|---|
+| 📰 NEWS | 36 h | 2 h |
+| ✨ PROMPT | 30 d | 24 h |
+| 🛠 TESTED_USE_CASE | 30 d | 24 h |
+| 🧠 EXPLAINER | 365 d | 3 d |
+| 📚 RESOURCE | 365 d | 3 d |
+
+Past either window the item becomes `STALE_REVIEW_REQUIRED` and waits for a person.
+**These are editorial defaults, not measured optima** — there is no engagement data yet,
+and inventing some would be worse than admitting that. They live in one file,
+[`scheduling/freshness.py`](src/ai_news_editor/scheduling/freshness.py), to be argued
+with and changed.
+
+### 🌍 Europe/Kyiv, and the two nights a year it matters
+
+The channel is edited from Ukraine, so `10:00` means 10:00 in Kyiv — never on whatever
+machine runs the scheduler. Times are stored in **UTC** and displayed in channel time.
+
+Twice a year local time is not a function: in spring an hour does not exist, in autumn
+an hour happens twice. Both are **refused rather than resolved** — because either
+resolution would publish at a time nobody chose, once a year, in a way nobody would
+find.
+
+### 🔒 Two schedulers, one post
+
+Two scheduler processes on one Mac is a Tuesday, not a hypothetical — a forgotten
+terminal, a restart, a launchd job. Claiming a due item is a **single conditional
+UPDATE**, so SQLite serialises the writers and the loser simply matches zero rows.
+Nothing is held in Python memory, so the guarantee survives a process that never learns
+it lost.
+
+A crashed worker's lease expires and the item is reassessed from scratch — recovery
+grants no permission to send. If the dead worker had already started publishing, the
+draft is left mid-publish, has no valid approval, and the item is **held for a human**
+rather than sent again.
+
+### 🖥 Running it locally
+
+Two processes, both optional, neither hosted:
+
+```bash
+ai-news telegram review-bot    # process 1 — review and schedule from your phone
+ai-news scheduler run          # process 2 — publishes what you queued
+```
+
+The Mac has to be awake for a post to go out at its intended minute. If it sleeps
+through one, the overdue policy above decides: a short delay publishes normally, a long
+one holds for review. **Restarting is always safe** — the queue is in SQLite, and every
+check is re-run from scratch.
+
+---
+
 ## 🧪 Quality
 
 Measured at this commit, not aspirational:
 
-- ✅ **1,663 automated tests**, all passing
-- ✅ **94% total coverage**
+- ✅ **1,834 automated tests**, all passing
+- ✅ **93% total coverage**
 - 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
 - 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)
 - 📱 **Review bot — 100%** (`review_bot.py`, `api.py`, `callbacks.py`, `session.py`)
@@ -365,7 +465,7 @@ send, and a recorded message id.
 | 📣 Telegram publication, including rich bundles | ✅ Working |
 | 📸 Media, albums, PDFs, first comments | ✅ Working |
 | 🧩 Partial-failure and UNCERTAIN handling | ✅ Working |
-| 📅 Publication queue and scheduler | 🔜 In progress |
+| 📅 Publication queue and local scheduler | ✅ Working |
 
 This is an actively developed personal project, not a finished v1. It is public because
 the engineering is worth reading.
@@ -374,9 +474,6 @@ the engineering is worth reading.
 
 ## 🗺 Roadmap
 
-- 📅 **Publication queue & local scheduler** — schedule an approved post for a future
-  time, with freshness policy per content type and an overdue policy that holds rather
-  than publishes late
 - 🗓 **Editorial calendar & content balancing** — variety across types, sources and
   audience tiers
 - 📊 **Analytics foundation** — understand what actually helps readers
