@@ -77,14 +77,23 @@ class TestRunId:
         assert new_run_id() != new_run_id()
 
 
+#: Credential *shapes*, built at runtime. Nothing here is or ever was a real key —
+#: they exist so the redaction filter can be proven to catch each shape — and none is
+#: written as a literal, so no secret scanner has anything to match on.
+FAKE_API_KEY = "sk-" + "z" * 32
+FAKE_SHORT_KEY = "sk-" + "z" * 28
+FAKE_ANTHROPIC_KEY = "sk-ant-" + "z" * 30
+FAKE_BEARER = "y" * 22
+
+
 class TestRedaction:
     @pytest.mark.parametrize(
         "text",
         [
             "token is 123456789:" + "A" * 35,
-            "key sk-" + "z" * 32,
-            "key sk-ant-" + "z" * 30,
-            "Authorization: Bearer " + "y" * 22,
+            "key " + FAKE_API_KEY,
+            "key " + FAKE_ANTHROPIC_KEY,
+            "Authorization: Bearer " + FAKE_BEARER,
             "TELEGRAM_BOT_TOKEN=123456789:" + "A" * 35,
             "api_key: supersecretvalue123",
         ],
@@ -92,7 +101,7 @@ class TestRedaction:
     def test_credential_shapes_are_masked(self, text: str) -> None:
         result = redact(text)
         assert MASK in result
-        for secret in ("" + "A" * 35, "supersecretvalue123"):
+        for secret in ("A" * 35, "supersecretvalue123"):
             assert secret not in result
 
     def test_ordinary_text_is_untouched(self) -> None:
@@ -101,8 +110,8 @@ class TestRedaction:
 
     def test_filter_scrubs_message_and_extras(self) -> None:
         record = _record(
-            "connecting with sk-" + "z" * 32,
-            detail="sk-" + "z" * 32,
+            "connecting with " + FAKE_API_KEY,
+            detail=FAKE_API_KEY,
         )
         RedactionFilter().filter(record)
         assert MASK in record.msg
@@ -116,17 +125,17 @@ class TestRedaction:
             __file__,
             1,
             "context %s",
-            ({"key": "sk-" + "z" * 28, "count": 3},),
+            ({"key": FAKE_SHORT_KEY, "count": 3},),
             None,
         )
         RedactionFilter().filter(record)
         message = record.getMessage()
-        assert "sk-" + "z" * 28 not in message
+        assert FAKE_SHORT_KEY not in message
         assert "count" in message
 
     def test_filter_scrubs_format_arguments(self) -> None:
         record = logging.LogRecord(
-            "t", logging.INFO, __file__, 1, "using %s", ("sk-" + "z" * 28,), None
+            "t", logging.INFO, __file__, 1, "using %s", (FAKE_SHORT_KEY,), None
         )
         RedactionFilter().filter(record)
         assert MASK in record.getMessage()

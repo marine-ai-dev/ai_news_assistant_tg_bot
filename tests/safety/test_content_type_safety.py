@@ -45,6 +45,10 @@ from ai_news_editor.writing.format import render_version
 pytestmark = pytest.mark.safety
 
 CHANNEL = "@test_channel"
+#: A syntactically valid but entirely fake bot token. Assembled at runtime rather
+#: than written as a literal: secret scanners match the *shape* of a Telegram
+#: token and cannot tell a placeholder from a credential, and a repository that
+#: cries wolf teaches its owner to ignore the alarm.
 TOKEN = "123456789:" + "A" * 35
 
 POST_BODY = (
