@@ -1,0 +1,62 @@
+<svg class="rich-terminal" viewBox="0 0 1141 196.39999999999998" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+        
+    .terminal-1551783525-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-1551783525-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-1551783525-r1 { fill: #c5c8c6 }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-1551783525-clip-terminal">
+      <rect x="0" y="0" width="1121.3999999999999" height="145.39999999999998" />
+    </clipPath>
+    <clipPath id="terminal-1551783525-line-0">
+    <rect x="0" y="1.5" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-1551783525-line-1">
+    <rect x="0" y="25.9" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-1551783525-line-2">
+    <rect x="0" y="50.3" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-1551783525-line-3">
+    <rect x="0" y="74.7" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-1551783525-line-4">
+    <rect x="0" y="99.1" width="1122.4" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1139" height="194.4" rx="8"/><text class="terminal-1551783525-title" fill="#c5c8c6" text-anchor="middle" x="569" y="27">$&#160;ai-news&#160;publication&#160;list</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-1551783525-clip-terminal)">
+    
+    <g class="terminal-1551783525-matrix">
+    <text class="terminal-1551783525-r1" x="0" y="20" textLength="963.8" clip-path="url(#terminal-1551783525-line-0)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;Publications&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-1551783525-r1" x="1122.4" y="20" textLength="12.2" clip-path="url(#terminal-1551783525-line-0)">
+</text><text class="terminal-1551783525-r1" x="0" y="44.4" textLength="963.8" clip-path="url(#terminal-1551783525-line-1)">┏━━━━━━━━━━┳━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓</text><text class="terminal-1551783525-r1" x="1122.4" y="44.4" textLength="12.2" clip-path="url(#terminal-1551783525-line-1)">
+</text><text class="terminal-1551783525-r1" x="0" y="68.8" textLength="963.8" clip-path="url(#terminal-1551783525-line-2)">┃&#160;Draft&#160;&#160;&#160;&#160;┃&#160;Ver&#160;┃&#160;Channel&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;┃&#160;Status&#160;&#160;&#160;&#160;┃&#160;Message&#160;id&#160;┃&#160;When&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;┃</text><text class="terminal-1551783525-r1" x="1122.4" y="68.8" textLength="12.2" clip-path="url(#terminal-1551783525-line-2)">
+</text><text class="terminal-1551783525-r1" x="0" y="93.2" textLength="963.8" clip-path="url(#terminal-1551783525-line-3)">┡━━━━━━━━━━╇━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━┩</text><text class="terminal-1551783525-r1" x="1122.4" y="93.2" textLength="12.2" clip-path="url(#terminal-1551783525-line-3)">
+</text><text class="terminal-1551783525-r1" x="0" y="117.6" textLength="963.8" clip-path="url(#terminal-1551783525-line-4)">│&#160;ff6e1a19&#160;│&#160;&#160;&#160;1&#160;│&#160;-100XXXXXXXXXX&#160;│&#160;SUCCEEDED&#160;│&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;2&#160;│&#160;2026-08-11&#160;09:33&#160;│</text><text class="terminal-1551783525-r1" x="1122.4" y="117.6" textLength="12.2" clip-path="url(#terminal-1551783525-line-4)">
+</text><text class="terminal-1551783525-r1" x="0" y="142" textLength="963.8" clip-path="url(#terminal-1551783525-line-5)">└──────────┴─────┴────────────────┴───────────┴────────────┴──────────────────┘</text><text class="terminal-1551783525-r1" x="1122.4" y="142" textLength="12.2" clip-path="url(#terminal-1551783525-line-5)">
+</text>
+    </g>
+    </g>
+</svg>

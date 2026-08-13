@@ -1,616 +1,412 @@
-# AI News Editor Agent
+# 🤖 AI News Assistant — Human-in-the-Loop Telegram Editorial System
 
-A human-in-the-loop editorial pipeline for a Ukrainian Telegram channel about AI.
+An AI-assisted **editorial pipeline** that discovers, evaluates, drafts, reviews and
+safely publishes Ukrainian AI content to Telegram — built around a real channel,
+[@learn_ai_easy](https://t.me/learn_ai_easy), written for ordinary readers rather than
+engineers.
 
-**Status: core MVP live-tested; five content formats, a rich post bundle, and a private
-Telegram review bot.** Collects from eight sources, normalizes and
-deduplicates deterministically, exports candidates for editorial review and imports ranked
-decisions, turns shortlisted stories into Ukrainian draft posts, puts them in front of a human
-who approves, edits, rejects or sends them back — and publishes an approved post to a Telegram
-channel after a second explicit confirmation. See
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and what was deliberately
-left for later.
+<div align="center">
 
-## Who the channel is for
+`🐍 Python does the infrastructure` · `🧠 Claude Code does the editorial thinking` · `👤 a human approves every single post`
 
-Ordinary people, not the industry. That includes people who barely use AI: someone who
-has opened ChatGPT once, does not know what an API is, has never heard of Notion, and is
-not sure whether ChatGPT, Claude and Gemini are different things.
+</div>
 
-Two independent dimensions describe every post.
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Tests](https://img.shields.io/badge/tests-1%2C657%20passing-2ea44f)](#-quality)
+[![Coverage](https://img.shields.io/badge/coverage-94%25-2ea44f)](#-quality)
+[![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
+[![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
 
-**Content type** — what kind of thing it is:
+---
 
-| Type | What it is | Origin |
-|---|---|---|
-| 📰 `NEWS` | Something happened and somebody reported it | An `Article` from a source |
-| ✨ `PROMPT` | A **tested** prompt — the copyable prompt is the product | A source, always |
-| 🛠 `TESTED_USE_CASE` | Something a person did with AI — the workflow is the product | A source, always |
-| 🧠 `EXPLAINER` | One concept, explained without jargon | Written here |
-| 📚 `RESOURCE` | A collection, checklist or cheat sheet worth keeping | Curated here |
+## 💡 What this actually is
 
-A **lifehack** is a use case whose evidence is one person reporting what worked for them
-(`evidence_kind = USER_REPORTED_LIFEHACK`) — found on Reddit, YouTube, a personal blog.
-Useful, and never upgraded into a general claim: «користувач розповів, що…», not «ШІ
-доведено підвищує продуктивність».
+It looks like a Telegram bot. It isn't.
 
-**Audience** — how much the post may assume, lowest first:
+It is a small **editorial system** with a hard safety boundary in the middle. Deterministic
+Python handles everything that must be reliable — fetching, deduplication, provenance,
+storage, delivery. A **Claude Code session acts as the editor and writer**, exchanging
+JSON with the application. And no piece of content reaches the channel unless a person
+has read that exact text and said yes to it.
 
-`NEWCOMER` → `BEGINNER` → `GENERAL` → `TECH_CURIOUS`
+> 🚫 **There is no external LLM API and no API key in this project.**
+> Claude Code is the editorial *operator*, not a dependency. There is no auto-publish
+> code path, and the setting that would enable one is rejected at startup.
 
-`NEWCOMER` assumes nothing. Audience is a judgement about *who a story matters to*, not
-about how simply it could be written — a developer API change is `TECH_CURIOUS` however
-gently it is worded.
+The interesting engineering here is not "call a model and post the result". It is
+everything that makes the answer to *"could something unapproved ever reach the channel?"*
+provably **no** — immutable versions, content-hash-bound approvals, an unforgeable
+authorization object, and a publication gate that re-checks reality at the last instant
+before a network call.
 
-Editorial guidance for the mix, deliberately **not** enforced anywhere in code: roughly
-40–50% of posts at `NEWCOMER`/`BEGINNER`; roughly 30% news, 20% product updates, 20%
-prompts, 15% explainers, 10% viral, 5% deeper science. There is no scheduler and no
-quota — see [docs/telegram_style_guide.md](docs/telegram_style_guide.md).
+---
 
-**A prompt must rest on a demonstration.** Not an idea that sounds useful — something
-somebody actually ran and wrote up. Each one records who tested it, with what tool, what
-they asked, what happened and what the limits were; a prompt without that is not
-publishable, and a human approving it does not change that. See
-[Prompts and explainers](#prompts-and-explainers).
+## ✨ Key Features
 
-**Editorial-original content gets no shortcut.** Written in-house means *more* exposed
-to invented facts, not less. Everything enters the same Draft → human review → approval
-gate → publish path as news, and safety tests assert it for every content type.
+| | |
+|---|---|
+| 📰 **Multi-source collection** | RSS, Atom and HTML changelogs with conditional GET and per-source fetch state |
+| 🧹 **Normalization & deduplication** | Canonical URLs, text extraction, near-duplicate detection |
+| 🔎 **Source provenance & trust tiers** | Every claim traces back to something findable |
+| 🧠 **Claude-assisted editorial evaluation** | Candidates scored against a written rubric, not vibes |
+| ✍️ **Ukrainian editorial writing workflow** | A documented voice, enforced by a style checker |
+| 🌱 **NEWCOMER-first audience modelling** | Four audience tiers; jargon detection built in |
+| ✨ **Source-backed tested prompts** | A prompt must rest on a real, findable demonstration |
+| 💡 **Real-world use cases & lifehacks** | What someone actually did, retold — workflow and result |
+| ✅ **Human-in-the-loop review** | Approve · Edit · Rewrite · Reject, from terminal or phone |
+| 📱 **Private Telegram review bot** | Owner-only; strangers get four words and no data |
+| 🔐 **Exact-DraftVersion approval** | Bound to a content hash covering the whole post bundle |
+| 📸 **Rich media publication** | Photos, albums, captions — approved text never truncated |
+| 📄 **PDF & document support** | Downloadable resources as their own recorded component |
+| 💬 **First-comment publication** | Long prompts go to the linked discussion group |
+| ♻️ **Idempotent publishing** | A unique partial index makes publish-exactly-once a database fact |
+| 🧩 **Partial-failure recovery** | The main post is *never* re-sent; retries fill only the gaps |
+| ❓ **UNCERTAIN-delivery protection** | An unknown outcome stops everything and calls a human |
+| 🤐 **Token redaction everywhere** | Logs, output, exceptions, database, fixtures — all scrubbed |
+| 🧪 **1,657 automated tests** | Including a safety suite that cannot be skipped by accident |
 
-**There is no LLM API in this project.** The editorial judgement is made by a Claude Code
-session reading an exported batch and writing back structured decisions. Python owns
-collection, storage, validation and ranking; the JSON schema between them is the seam, so an
-automated evaluator could take the same contract later without touching the database.
+---
 
-## The rule this project is built around
+## 🖼 What it looks like
 
-Nothing reaches Telegram unless a human explicitly approved **the exact draft version**
-being published. That is enforced structurally, not by convention:
+**A real review card**, exactly as the private bot sends it — a `PROMPT` post written for
+readers with no prior AI experience:
 
-- draft content lives in immutable, append-only `draft_versions`; editing appends a version
-- a `PublishAuthorization` can only be produced by the approval gate, and names one content hash
-- appending content to an `APPROVED` draft returns it to `PENDING_REVIEW` at the storage layer
-- the lifecycle state machine rejects every transition that would skip review
-- an authorization is never stored; it is rebuilt from the recorded approval on every send
-- the Telegram client cannot approve anything, and is never reached for a draft that fails the gate
+![Telegram review bot — a PROMPT card for NEWCOMER readers](docs/screenshots/telegram-review-card-prompt.svg)
 
-See `src/ai_news_editor/domain/authorization.py` and `tests/safety/`.
+**The publication log** after a real end-to-end publication to the test channel:
 
-## Requirements
+![ai-news publication list](docs/screenshots/cli-publication-list.svg)
 
-Python 3.11+. No other system dependencies; storage is a local SQLite file.
+**Health check** — read-only, contacts nothing:
 
-## Setup
+![ai-news doctor](docs/screenshots/cli-doctor.svg)
 
-```bash
-/opt/homebrew/bin/python3.11 -m venv .venv
+<details>
+<summary>📊 More: pipeline funnel and a NEWS review card</summary>
+
+![ai-news status](docs/screenshots/cli-status.svg)
+
+![Telegram review bot — a NEWS card](docs/screenshots/telegram-review-card-news.svg)
+
+</details>
+
+> 🧾 These are **genuine captures** of the real CLI and the real renderer running against
+> the project database — not mockups. The private channel id, bot username and local
+> filesystem paths are redacted. No fabricated Telegram screenshots appear anywhere in
+> this repository.
+
+---
+
+## 🧬 Content model
+
+Six kinds of post, because a reader wants different things from each:
+
+| Type | What it gives the reader |
+|---|---|
+| 📰 **NEWS** | Something that happened, explained without jargon |
+| ✨ **TESTED PROMPT** | A prompt to copy — backed by a real demonstration |
+| 🛠 **TESTED USE CASE** | What someone actually did with AI: workflow and result |
+| 💡 **REAL USER LIFEHACK** | A small practical trick that survived contact with reality |
+| 🧠 **EXPLAINER** | One concept, no assumed background — *ШІ простими словами* |
+| 📚 **RESOURCE** | Something to keep: a checklist, cheat sheet or collection |
+
+And four audience tiers, so a post knows who it is speaking to:
+
+```
+🌱 NEWCOMER  →  🙂 BEGINNER  →  👤 GENERAL  →  🧩 TECH_CURIOUS
+   never assumes                              comfortable with
+   prior AI use                               technical framing
 ```
 
+`NEWCOMER` is the default. If a post cannot be understood by someone who has never opened
+an AI chat, it is not ready.
+
+---
+
+## 🏗 Architecture
+
+```mermaid
+flowchart TD
+    A["🌐 Internet sources<br/>RSS · Atom · changelogs"] --> B["📥 Collection"]
+    B --> C["🧹 Normalize & deduplicate"]
+    C --> D["🧠 Claude editorial evaluation"]
+    D --> E["✍️ Ukrainian content writing"]
+    E --> F["🗃 Draft + immutable DraftVersion"]
+    F --> G["📱 Human review<br/>terminal or Telegram"]
+    G -->|"❌ reject · 📝 rewrite · ✏️ edit"| F
+    G -->|"✅ approve this exact version"| H["🔐 PublishAuthorization<br/><i>content-hash bound</i>"]
+    H --> I["🛡 Publication gate<br/><i>re-verified before every send</i>"]
+    I --> J["📣 Telegram channel"]
+
+    style G fill:#1f6feb,color:#fff
+    style H fill:#238636,color:#fff
+    style I fill:#8957e5,color:#fff
+```
+
+Everything left of the blue box is assistance. Everything right of it is consequence.
+📖 **[Full architecture →](docs/architecture.md)**
+
+---
+
+## 🔐 Safety by Design
+
+This is the part worth reading if you only read one thing.
+
+- 🚫 **No auto-approval, no auto-publish.** Enforced by a test that walks the CLI's
+  registered options and fails if `--yes`, `--all` or `--approve-all` ever appears.
+- 🔗 **Exact version + content hash binding.** The hash covers the *whole* post — text,
+  comment, media and footer. Change any of it and the approval stops verifying.
+- 🧊 **Immutable version history.** SQLite triggers, not convention. "What did I approve
+  on Tuesday?" is always answerable.
+- ✏️ **Editing invalidates approval.** A new version returns the draft to review, in the
+  same transaction that writes it.
+- 🎫 **An unforgeable authorization.** `PublishAuthorization` refuses to construct outside
+  the gate. A publisher can receive one; it can never make one.
+- ⏱ **Re-verification at the last instant.** Every check runs again immediately before
+  the network call, because minutes or days may have passed since approval.
+- 📑 **Source-backed prompt policy.** A prompt without a findable demonstration cannot be
+  published — and *approval cannot override this*.
+- 📵 **Owner-only review bot.** Authorization runs before anything touches a draft. A
+  stranger gets no card, no counts, no confirmation that anything exists.
+- ♻️ **Publish exactly once.** A unique partial index; failed and uncertain attempts stay
+  recordable because they are expected to repeat.
+- 🧩 **Partial success is recorded, never smoothed over.** The main post is never re-sent.
+- ❓ **UNCERTAIN stops everything.** A lost response means the outcome is unknown, so
+  nothing is retried and a human checks the channel. An incomplete post beats a duplicate
+  one, every time.
+- 🧾 **External content is untrusted data.** Stored, quoted, attributed — never executed.
+- 🤐 **The token is nowhere.** `SecretStr` plus a log filter that scrubs token-shaped
+  strings from every record, including non-string values.
+
+📖 **[Full safety documentation →](docs/safety.md)**
+
+---
+
+## 🧰 Tech Stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| 🐍 Language | **Python 3.11+** | `StrEnum`, `zoneinfo`, modern typing |
+| 🧱 Models | **Pydantic v2** | `extra="forbid"`, frozen models, validators as invariants |
+| 🗄 Storage | **SQLite** (stdlib `sqlite3`) | No ORM — hand-written ordered migrations with checksums |
+| 💻 CLI | **Typer** + **Rich** | Readable commands, readable output |
+| 🌐 HTTP | **httpx** | One HTTP library, `MockTransport` in every test |
+| 📰 Feeds | **feedparser** | The RSS/Atom zoo, handled |
+| 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
+| 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
+| 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
+| 🧪 Quality | **pytest** + **Ruff** | 1,657 tests; a safety suite that cannot be skipped |
+
+**Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
+
+---
+
+## 📁 Project Structure
+
+```text
+src/ai_news_editor/
+├── domain/         # 🧱 models, enums, content hashing, the authorization object
+├── sources/        # 🌐 RSS/Atom/changelog fetching, conditional GET, fetch state
+├── pipeline/       # 🧹 normalization, deduplication, screening
+├── editorial/      # 🧠 candidate export → Claude evaluation → decision import
+├── writing/        # ✍️ writing assignments, style checks, footer rendering
+├── content/        # ✨ prompts, explainers, use cases, jargon detection
+├── review/         # ✅ the human review service — the only path to a decision
+├── publishing/     # 🛡 gate · plan · rich · service · Telegram client
+├── bot/            # 📱 private owner-only review bot
+├── storage/        # 🗄 repositories + ordered SQL migrations
+├── observability/  # 🤐 structured logging with token redaction
+└── cli/            # 💻 Typer commands
+
+tests/
+├── unit/           # fast, isolated
+├── integration/    # real SQLite, real migrations
+└── safety/         # 🔒 the invariants that must never regress
+
+docs/
+├── architecture.md      # 🏗 system design, data flow, publication safety
+├── safety.md            # 🔐 every guarantee and how it is enforced
+├── editorial_rubric.md  # 📊 how candidates are judged
+├── telegram_style_guide.md  # 🎨 the channel's voice, in detail
+└── screenshots/         # 🖼 real captures
+```
+
+---
+
+## 🚀 Quick Start
+
+**Requirements:** Python 3.11+ · macOS or Linux · no external services
+
 ```bash
+git clone https://github.com/marine-ai-dev/ai_news_assistant_tg_bot.git
+cd ai_news_assistant_tg_bot
+
+python3.11 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 ```
 
-Configuration is optional — the defaults work. To override anything, copy `.env.example`
-to `.env`. `.env` is git-ignored and must never be committed.
-
-## Initialize the database
-
-```bash
-.venv/bin/ai-news db init
-```
-
-Safe to run repeatedly; it applies only pending migrations.
-
-## Commands
-
-| Command | What it does |
-|---|---|
-| `ai-news version` | Print the application version |
-| `ai-news doctor` | Check local health: Python, config, data directory, schema state. Makes no network calls |
-| `ai-news db init` | Create the database and apply all migrations |
-| `ai-news db migrate` | Apply pending migrations (same operation, clearer name for updates) |
-| `ai-news db status` | Show applied and pending migrations, plus row counts |
-| `ai-news sources` | List configured sources and what each is for |
-| `ai-news collect` | Fetch every enabled source and store new items |
-| `ai-news process` | Normalize, deduplicate and screen collected items |
-| `ai-news status` | Show the pipeline funnel from raw items to evaluation candidates |
-| `ai-news editorial export` | Write a batch of candidates for editorial review |
-| `ai-news editorial validate` | Check a reviewed batch without writing anything |
-| `ai-news editorial import` | Store editorial decisions (all-or-nothing, idempotent) |
-| `ai-news editorial shortlist` | Show the ranked shortlist and any held stories |
-| `ai-news editorial status` | Show editorial progress, including stale evaluations |
-| `ai-news draft export` | Write assignments for shortlisted stories |
-| `ai-news draft validate` | Check finished drafts without writing anything |
-| `ai-news draft import` | Store Draft + DraftVersion records (PENDING_REVIEW) |
-| `ai-news draft list` / `show` | Read drafts back |
-| `ai-news content template` | Write an empty prompt/explainer batch to fill in |
-| `ai-news content validate` | Check a batch, with jargon warnings, writing nothing |
-| `ai-news content import` | Store content items + drafts (PENDING_REVIEW) |
-| `ai-news content list` | Read stored prompts and explainers |
-| `ai-news review` | Open the review queue: approve, edit, reject, request a rewrite |
-| `ai-news review status` | Show how many drafts sit in each state |
-| `ai-news review history <draft-id>` | Show every version and every human decision on a draft |
-| `ai-news telegram doctor` | Check the bot, the destination and posting rights. Sends nothing |
-| `ai-news telegram whoami` | Print your Telegram user id, for the review bot |
-| `ai-news telegram review-bot` | Run the private review bot (long polling, local) |
-| `ai-news publish <draft-id>` | Publish one approved draft, after typing `PUBLISH` |
-| `ai-news publication approved` | List drafts that are approved and therefore publishable |
-| `ai-news publication list` | The publication log: successes, failures, unresolved attempts |
-
-`collect` accepts `--source <id>` (repeatable) to read one feed, and `--dry-run` to fetch and
-parse while writing nothing at all. It exits `0` when every source succeeded, `1` when some
-failed, and `2` on a configuration or database problem.
-
-`process` accepts `--limit <n>` and `--source <id>`. Both commands are idempotent: running
-them repeatedly converges instead of accumulating.
-
-`python app.py <command>` works identically without installing the package.
-
-## Sources and trust tiers
-
-Sources are configured in [config/sources.yaml](config/sources.yaml) — human-editable,
-committed, and containing no secrets. Each entry declares an `adapter`, a `trust_tier`, and an
-`editorial_role` explaining why the source is in the mix.
-
-Three adapters exist: `rss` for feeds, `html_changelog` for vendors that publish no feed
-(driven by CSS selectors in config, never per-site code), and `hn_signal` for Hacker News.
-
-| Trust tier | What it means |
-|---|---|
-| `OFFICIAL` | The vendor's own announcement |
-| `REPUTABLE_SECONDARY` | Established media reporting on it |
-| `COMMUNITY_SIGNAL` | People are discussing it |
-
-**Collection is not verification.** A trust tier records *where a claim came from*, never
-whether it is true. Community signals are stored in their own table, can never become article
-content, and are refused by the normalizer outright — a Hacker News thread is evidence of
-attention and nothing else. Deciding what to believe is a later phase, and it will always end
-at a human.
-
-## Editorial review
-
-```bash
-ai-news editorial export --limit 15
-```
-
-A Claude Code session reads the batch, applies [docs/editorial_rubric.md](docs/editorial_rubric.md),
-researches anything sensitive or unclear, and writes a reviewed JSON file. Then:
-
-```bash
-ai-news editorial import editorial_work/<batch-id>.reviewed.json
-```
-
-Nine dimensions are scored 0–100. **Python computes the ranking**, not the evaluator: the
-composite comes from validated components using fixed weights, so ordering is deterministic
-whoever did the judging.
-
-`credibility` and `general_ai_relevance` are gates rather than weights. A story cannot make up
-for being unreliable or off-topic by being entertaining — shortlisting needs credibility ≥ 70,
-and a sensitive story (deepfake, scam, accusation) cannot be shortlisted without actual
-verification. A good story with thin evidence becomes `HOLD_FOR_VERIFICATION` rather than being
-thrown away.
-
-Import is strict and all-or-nothing: one bad review and nothing is written. Re-importing the
-same file adds nothing. Evaluations are append-only history, bound by fingerprint to the exact
-content reviewed — if an article is later renormalized, its old evaluation is reported as stale
-instead of quietly standing in for a current one.
-
-Article text in a batch is untrusted data. A story telling the reviewer to score it 100 and
-publish it is just a string in a field: the reviewed schema has no vocabulary for approving or
-publishing anything, and a safety test enforces that.
-
-## Draft writing
-
-```bash
-ai-news draft export --limit 5
-```
-
-A Claude Code session reads the assignments, applies
-[docs/telegram_style_guide.md](docs/telegram_style_guide.md), checks the source where the
-excerpt is thin, and writes Ukrainian posts. Then:
-
-```bash
-ai-news draft import writing_work/<batch-id>.drafts.json
-```
-
-Only stories with a **current SHORTLIST evaluation** can be written. Rejected stories
-produce nothing, and stories `HOLD_FOR_VERIFICATION` stay blocked until the verification
-is actually resolved — writing them anyway would route around the only check between an
-unverified claim and a post. A stale evaluation forces re-evaluation first.
-
-Posts come in three formats — `QUICK`, `STANDARD`, `DEEP_DIVE` — with editorial length
-targets. Being outside a target is reported; nothing is ever silently cropped.
-
-**Draft ≠ approved. Draft ≠ published.** Every imported draft lands in `PENDING_REVIEW`.
-There is no code path from importing a draft to `APPROVED` or `PUBLISHED`, the writing
-schema has no field that could request one, and safety tests enforce both. Approving a
-post is a separate, explicit human step — the next section.
-
-Python assembles the final post from the headline, body and source line, and computes
-the content hash. A writer supplies parts; it never supplies the text a human will
-eventually approve.
-
-## Human review
-
-```bash
-ai-news review
-```
-
-One draft at a time, best editorial score first, showing the post exactly as it would be
-sent plus the internal writer notes that never are. Then:
-
-| Key | Action | Effect |
-|---|---|---|
-| `A` | Approve | `PENDING_REVIEW → APPROVED`, after typing `APPROVE` in full |
-| `E` | Edit | Opens `$EDITOR`; saving appends version N+1 and stays in review |
-| `R` | Reject | `PENDING_REVIEW → REJECTED`, terminal, nothing is deleted |
-| `W` | Needs rewrite | `PENDING_REVIEW → NEEDS_REWRITE` with a note to work from |
-| `S` / `N` | Skip / Next | Navigation only — records nothing, changes nothing |
-| `Q` | Quit | Stops; everything unreviewed stays exactly as it was |
-
-Approval takes the literal word `APPROVE`. Not `y`, not `yes`, not Enter — a single
-accidental keystroke must not put a post in front of an audience.
-
-`--draft <id>` reviews one draft; `--category <name>` reviews one category. There is no
-`--yes`, no `--approve-all`, no `--auto-approve`, and no threshold that approves by score.
-Those flags are absent because the code behind them does not exist; a safety test asserts
-no such option is ever registered.
-
-**`APPROVED` does not mean published.** It means a human read that exact version and said
-yes. Approval mints a `PublishAuthorization` naming one draft, one version and one content
-hash — and there is no publisher for it to reach yet.
-
-Editing an approved draft invalidates that approval automatically: the new text is a new
-version with a new hash, the storage layer returns the draft to `PENDING_REVIEW`, and the
-old authorization stops verifying. Nobody has to remember to revoke anything.
-
-```bash
-ai-news review history <draft-id>
-```
-
-Every version and every recorded decision, oldest first, with whether a valid publication
-authorization currently exists.
-
-## Publishing to Telegram
-
-`APPROVED` means a human approved that exact version. Publishing is a **second** decision,
-asked separately, because it is the one strangers can see.
-
-### 1. Create the bot
-
-Message [@BotFather](https://t.me/BotFather) in Telegram, send `/newbot`, and follow the
-prompts. It replies with a token that looks like `123456789:AA...`. **That token is a
-password for your channel** — anyone holding it can post. It goes in `.env` and nowhere else.
-
-### 2. Add the bot to a channel
-
-Start with a **private test channel**, not the real one. Create a channel, open
-*Administrators → Add Administrator*, add your bot, and grant **only** *Post Messages*. It
-needs nothing else — no delete, no ban, no member management, no message editing.
-
-A bot cannot see a chat it has not been added to, so this step has to happen before the
-next one will work.
-
-### 3. Configure
+**Configure** — copy the template and fill in your own values:
 
 ```bash
 cp .env.example .env
 ```
 
-Set `AI_NEWS_TELEGRAM_BOT_TOKEN` and `AI_NEWS_TELEGRAM_CHANNEL` (a public `@username` or a
-numeric chat id). `.env` is git-ignored. Never commit a real token; if one is ever exposed,
-revoke it with `/revoke` in BotFather.
+`.env` is git-ignored and must never be committed. Telegram settings are optional: the
+whole pipeline up to review works without them.
 
-### 4. Check the setup without sending anything
-
-```bash
-ai-news telegram doctor
-```
-
-Calls `getMe`, `getChat` and `getChatMember` and reports the bot identity, the resolved
-destination and whether it has posting rights. It never posts a test message. Where the API
-cannot answer — `can_post_messages` is not reported for every chat type — it says `UNKNOWN`
-rather than claiming a pass.
-
-### 5. Approve something
+**Initialize the database** (creates it and applies every migration):
 
 ```bash
-ai-news review
+.venv/bin/ai-news db init
 ```
 
-Then check what is publishable:
+**Check everything is healthy** — contacts nothing:
 
 ```bash
-ai-news publication approved
+.venv/bin/ai-news doctor
 ```
 
-### 6. Dry run
-
-```bash
-ai-news publish <draft-id> --dry-run
-```
-
-Verifies the approval, rebuilds the authorization, renders the exact payload and prints it
-with the destination. Makes zero Telegram requests and records nothing.
-
-### 7. Publish
-
-```bash
-ai-news publish <draft-id>
-```
-
-One draft id, named explicitly — this command never goes looking for something to publish.
-It shows the destination and the exact text, then asks:
-
-```
-Type PUBLISH to publish:
-```
-
-Enter publishes nothing. `y` publishes nothing. `yes` publishes nothing. Only the literal
-word `PUBLISH` sends the message.
-
-### 8. Check the record
-
-```bash
-ai-news publication list
-```
-
-Every attempt: the successes with their Telegram message id, the failures, and any attempt
-whose outcome was never learned.
-
-### What happens if something goes wrong
-
-**A definite failure** — bad request, no permission, server error — records a `FAILED`
-attempt and returns the draft to `APPROVED`. Retrying does not need a second approval; the
-approval was never in question, only the network.
-
-**A lost response** is the interesting one. If the request was sent and the reply never
-arrived, the post may or may not exist, and nothing can tell the difference locally.
-Telegram's `sendMessage` has no idempotency key, so a retry could produce a duplicate post.
-The attempt is therefore recorded as `UNCERTAIN`, the draft stays in `PUBLISHING`, and the
-next run refuses to send. **Look at the channel and resolve it yourself** — that is a
-judgement about the outside world, and the application does not get to guess.
-
-**A duplicate run** — the same command twice, by accident — sends nothing the second time.
-A unique index allows one successful publication per version per destination, and the draft
-is already `PUBLISHED`, which is not a publishable state.
-
-SQLite and Telegram cannot share a transaction. This design does not pretend otherwise: it
-narrows the window, records every attempt, and stops rather than guessing.
-
-## How processing works
-
-`collect` stores faithful `RawItem` records; `process` derives `Article` candidates from them.
-Raw items are never mutated, so every article traces back to the bytes that produced it.
-
-Normalization is strictly mechanical — decode entities, strip markup, collapse whitespace,
-canonicalize the URL, compute fingerprints. Nothing is summarized, translated or invented; a
-missing publication date stays missing.
-
-Deduplication runs in layers, and every decision records *why*: identical canonical URL,
-identical content fingerprint, identical title from the same source, then SimHash within a
-bounded Hamming distance. Cross-source resemblance is recorded as a *possible* duplicate and
-deliberately not acted on — secondary reporting is worth keeping for corroboration later.
-
-The prefilter is deliberately narrow. It removes empty entries, navigation stubs, job posts and
-earnings notices, each with a machine-readable reason. It never filters on technicality: a
-deeply technical release can matter enormously to ordinary readers, and judging that is the
-LLM editor's job in a later phase, not a keyword list's.
-
-## Tests
+**Run the tests:**
 
 ```bash
 .venv/bin/pytest
 ```
 
+### 💻 Main commands
+
+| Command | What it does |
+|---|---|
+| `ai-news doctor` | 🩺 Local health check. No network. |
+| `ai-news sources` | 🌐 Configured sources and their last fetch outcome |
+| `ai-news collect` | 📥 Fetch sources, store new items |
+| `ai-news process` | 🧹 Normalize and deduplicate into candidates |
+| `ai-news status` | 📊 The pipeline funnel |
+| `ai-news editorial export/import` | 🧠 Hand candidates to Claude, take decisions back |
+| `ai-news draft export/import` | ✍️ Hand assignments to Claude, take drafts back |
+| `ai-news content template/import` | ✨ Create prompts, explainers, use cases |
+| `ai-news review` | ✅ Review drafts — approve, edit, rewrite, reject |
+| `ai-news telegram doctor` | 🩺 Verify bot, channel and rights. Read-only. |
+| `ai-news telegram review-bot` | 📱 Run the private review bot |
+| `ai-news publish <draft-id>` | 📣 Publish one approved draft (`--dry-run` sends nothing) |
+| `ai-news publication list` | 📜 The publication log |
+
+---
+
+## 🔄 Example workflow
+
+Who does what, and which steps cannot be undone:
+
+```mermaid
+flowchart TD
+    A["🐍 ai-news collect"] --> B["🐍 ai-news process"]
+    B --> C["🐍 ai-news editorial export"]
+    C --> D["🧠 Claude evaluates candidates"]
+    D --> E["🐍 ai-news editorial import"]
+    E --> F["🐍 ai-news draft export"]
+    F --> G["🧠 Claude writes Ukrainian copy"]
+    G --> H["🐍 ai-news draft import"]
+    H --> I["📱 review on phone or terminal"]
+    I --> J["👤 APPROVE — irreversible decision"]
+    J --> K["🐍 ai-news publish --dry-run"]
+    K --> L["👤 PUBLISH — irreversible, public"]
+
+    style D fill:#8957e5,color:#fff
+    style G fill:#8957e5,color:#fff
+    style J fill:#d29922,color:#000
+    style L fill:#da3633,color:#fff
+```
+
+🐍 **grey** = deterministic Python · 🧠 **purple** = Claude Code editorial work ·
+👤 **amber/red** = the two things only a human ever does
+
+Steps 1–8 can be repeated freely. Step 10 puts words in front of readers and cannot be
+taken back — which is why every guarantee in [safety.md](docs/safety.md) exists.
+
+---
+
+## 🧪 Quality
+
+Measured at this commit, not aspirational:
+
+- ✅ **1,657 automated tests**, all passing
+- ✅ **94% total coverage**
+- 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
+- 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)
+- 📱 **Review bot — 100%** (`review_bot.py`, `api.py`, `callbacks.py`, `session.py`)
+- ✅ **Ruff clean**, zero warnings
+- 🔒 A dedicated `tests/safety/` suite, marked so it cannot be skipped by accident
+- 🌐 **No test touches the network** — every HTTP call goes through `httpx.MockTransport`
+
 ```bash
+.venv/bin/pytest                                  # everything
+.venv/bin/pytest -m safety                        # just the invariants
+.venv/bin/pytest --cov=ai_news_editor             # with coverage
 .venv/bin/ruff check .
 ```
 
-Tests are deterministic, use temporary databases, and make no network calls.
-`tests/safety/` covers the approval invariants and must never be skipped.
+---
 
-## Layout
+## 🚦 Project Status
 
-```
-src/ai_news_editor/
-  domain/         entities, lifecycles, approval gate — depends on nothing
-  storage/        SQLite connection, SQL migrations, per-entity repositories
-  sources/        source adapters: HTTP boundary, RSS/Atom, config, registry
-  pipeline/       orchestration — the only layer combining adapters with storage
-  content/        prompts and explainers: the batch contract, import, jargon warnings
-  review/         review actions and $EDITOR integration, independent of any front end
-  publishing/     the approval gate, the Telegram client, and the send-once orchestration
-  observability/  structured logging, secret redaction
-  cli/            Typer entry points
-tests/
-  unit/           domain logic, parsing, HTTP boundary, configuration
-  contract/       the suite every source adapter must satisfy
-  integration/    database, repositories, collection pipeline, CLI
-  safety/         approval invariants and integration boundaries
-```
+**Working today — a complete path from a URL to a published post.**
 
-## Prompts and explainers
+One real end-to-end publication has already succeeded against a private test channel,
+through the full gate: approval bound to an exact version, re-verification before the
+send, and a recorded message id.
 
-Not everything worth publishing is news. Two formats are written in-house.
-
-```bash
-ai-news content template
-```
-
-Writes an empty batch. A Claude Code session fills it in following
-[docs/telegram_style_guide.md](docs/telegram_style_guide.md).
-
-**For a prompt, research comes first.** Search for a workflow somebody demonstrated,
-open the source, confirm the evidence is real, and only then write. The batch requires
-the source URL, who tested it, the tool they used, what they asked, what they observed
-and any limitations — all of it, or the import fails. Nothing may be inferred to fill a
-gap: a source that says "ChatGPT" is recorded as "ChatGPT", never as a model version we
-guessed.
-
-For an explainer: one concept, an example from real life, and why it matters. Explainers
-stay editorial-original — they explain rather than report, so they carry references
-where facts need them rather than a tested demonstration. Then:
-
-```bash
-ai-news content validate content_work/<batch>.content.json
-```
-
-Checks structure and flags jargon that a `NEWCOMER` post uses without an apparent
-explanation. That check is a reading aid with a crude heuristic — it misses things and
-occasionally flags a term you did explain. It never blocks an import.
-
-```bash
-ai-news content import content_work/<batch>.content.json
-```
-
-Creates a `ContentItem` (the editorial substance) plus a Draft in `PENDING_REVIEW`.
-
-**No fake provenance.** An editorial-original draft has `article_id = NULL` and an
-origin of `EDITORIAL_ORIGINAL`; the database refuses a prompt that carries an article and
-refuses a news draft that has none.
-
-A prompt post names the demonstration it reports and links to it. An explainer carries no
-`🔗 Джерело` line, because there is no source to name — its factual references are stored
-separately, each recording *what claim it supports*, and are never dressed up as a source
-article.
-
-Prompts written before this rule existed are marked `LEGACY_UNVERIFIED` and can never be
-published. They were not deleted, not rewritten, and not given a source after the fact —
-the honest label for content whose provenance cannot be reconstructed without inventing
-it.
-
-## Reviewing from your phone
-
-The same review workflow as `ai-news review`, behind buttons in a private Telegram chat.
-It is the same bot that publishes — one BotFather bot, two jobs — and it is for you
-alone: every update is checked against one configured account before a draft is loaded.
-
-### Setup, once
-
-```bash
-.venv/bin/ai-news telegram whoami
-```
-
-Message your bot anything; the command prints your Telegram user id and exits. Put it in
-`.env` as `AI_NEWS_TELEGRAM_OWNER_USER_ID`. It stays out of git — it identifies a real
-account, and nobody else's id should ever be in there.
-
-### Running it
-
-```bash
-.venv/bin/ai-news telegram review-bot
-```
-
-Long polling: no webhook, no public URL, no hosting. The bot works for as long as this
-process is running on this Mac, and stops when you close the terminal. Nothing is lost
-when it stops — every decision was committed when you made it.
-
-### Using it
-
-`/review` shows the next draft awaiting review, best editorial score first — the same
-queue and the same ordering the terminal uses.
-
-| Button | What happens |
+| Area | State |
 |---|---|
-| ✅ Схвалити | Asks to confirm, then approves **that exact version** |
-| ✏️ Редагувати | Send replacement text as one message: first line headline, rest body |
-| 📝 Переписати | Marks `NEEDS_REWRITE`. Nothing is regenerated automatically |
-| ❌ Відхилити | Asks to confirm, then rejects. Nothing is deleted |
-| ⏭ Пропустити | Navigation only — records nothing |
-| 📜 Історія | Versions and decisions so far |
+| 📥 Collection, normalization, deduplication | ✅ Working |
+| 🧠 Claude editorial evaluation workflow | ✅ Working |
+| ✍️ Ukrainian writing workflow, all content types | ✅ Working |
+| ✅ Human review — CLI and Telegram | ✅ Working |
+| 🔐 Approval gate and content-hash binding | ✅ Working |
+| 📣 Telegram publication, including rich bundles | ✅ Working |
+| 📸 Media, albums, PDFs, first comments | ✅ Working |
+| 🧩 Partial-failure and UNCERTAIN handling | ✅ Working |
+| 📅 Publication queue and scheduler | 🔜 In progress |
 
-Approve and reject both take **two taps**. A single mis-tap on a phone must not decide
-anything, which is the same reason the terminal makes you type `APPROVE`.
+This is an actively developed personal project, not a finished v1. It is public because
+the engineering is worth reading.
 
-If the draft changed between the card being drawn and the button being tapped — you
-edited it elsewhere, or it was already decided — the tap is refused and the current
-version is shown instead. The approval is bound to the version you actually read.
+---
 
-### The review bot does not publish
+## 🗺 Roadmap
 
-Approving in Telegram sets `APPROVED` and stops. Publication stays a separate, explicit
-act:
+- 📅 **Publication queue & local scheduler** — schedule an approved post for a future
+  time, with freshness policy per content type and an overdue policy that holds rather
+  than publishes late
+- 🗓 **Editorial calendar & content balancing** — variety across types, sources and
+  audience tiers
+- 📊 **Analytics foundation** — understand what actually helps readers
 
-```bash
-.venv/bin/ai-news publish <draft-id>
-```
+> 💰 Monetization is intentionally deferred until real audience data exists.
 
-That is deliberate. Approving is an editorial judgement; publishing is the irreversible
-one, and putting both behind adjacent buttons on a phone is how the wrong one gets
-tapped. Safety tests assert the bot cannot reach a publisher, cannot build a channel
-payload, and cannot construct a `PublishAuthorization`.
+---
 
-## What a post is made of
+## 📣 The channel
 
-A post stopped being only text in Phase 8.2, because the channel this project automates
-never was. A publication bundle may carry:
+Built around **[@learn_ai_easy](https://t.me/learn_ai_easy)** — a Ukrainian channel
+explaining AI to people who are not engineers: from someone who has never opened an AI
+chat, to someone curious about how the tools work.
 
-| Part | What it is |
-|---|---|
-| Post text | Emoji-led paragraphs, as the channel has always written them |
-| Comment | The first comment, for a prompt too long to sit in the post |
-| Media | Result images, screenshots, a PDF — each with its origin recorded |
-| Resource | What a `RESOURCE` post gives the reader |
-| Footer | `👉 Запросити друзів: @learn_ai_easy` |
+That audience is a design constraint, not a marketing note. It is why jargon detection is
+a code path, why `NEWCOMER` is the default tier, and why a prompt has to be backed by
+someone actually running it.
 
-**The approval covers all of it.** The content hash includes the comment, the media
-identities, the resource and the footer, so approving a post and then changing its
-comment produces a different version that nobody has approved. That is the same rule
-that has always applied to the text, extended to everything else a reader receives.
+---
 
-**The footer is frozen at creation.** It is stored on the version rather than rebuilt
-from configuration at send time, so changing a setting cannot alter an approved post.
-The handle comes from `AI_NEWS_CHANNEL_HANDLE` and is verified before a draft exists — a
-writing session never types it.
+## 📄 License
 
-**Old posts hash exactly as they did.** A version with no bundle content omits the bundle
-from its hash entirely, so every approval recorded before Phase 8.2 still verifies,
-including the one behind the post already on the channel.
+No license file yet — all rights reserved for now. If you want to use something here,
+please open an issue and ask.
 
-Phase 8.2 models and reviews the bundle. **Sending media, comments and files to Telegram
-is Phase 8.3** — publication today is still text-only, and a bundle with a comment will
-have its comment reviewed but not yet sent.
+---
 
-## Rich publication
+<div align="center">
 
-A post may be several Telegram messages: an image, the text, a comment, a file. Telegram
-has no transaction across them, so publication works in a way that admits that.
+*Built with deterministic Python, Claude Code as the editor, and a human who reads every
+word before it goes out.* ✍️
 
-**The plan is built before anything is sent.** Every file is checked, every call is
-decided, and `--dry-run` prints the exact sequence a real run would make — because it is
-the same function:
-
-```bash
-.venv/bin/ai-news publish <draft-id> --dry-run
-```
-
-```
-1. MEDIA: sendMediaGroup → channel
-   2 images as one album
-2. MAIN: sendMessage → channel
-   the approved post, in full
-—  COMMENT: DEFERRED — the channel has no linked discussion group
-```
-
-**The approved text is never truncated.** Telegram's photo caption limit is smaller than
-many of this channel's posts, so a post that fits travels as a caption and one that does
-not gets its image first and the full text immediately after. Nothing is shortened to
-fit; a human approved specific words.
-
-**Each part is recorded separately.** If the post goes out and the comment fails, the
-post is never sent again — a retry reads the component history, sees `MAIN SUCCEEDED`,
-and sends only what is missing. A component whose outcome was lost blocks the resume
-entirely: it may already be on the channel, and deciding that is a human's job.
-
-**Comments need a linked discussion group.** Telegram channel comments live in the
-group linked to the channel. Without one, a comment is recorded as `DEFERRED` and the
-post still publishes — it is never quietly folded into the post text, because the post
-says the prompt is in the comments and merging them is a different post.
-
-**Source media is never re-uploaded.** An image belonging to a source is recorded by URL
-so a reader can go and look at it. Republishing somebody's image because it was
-convenient is how a channel acquires a complaint.
-
-Files live under `AI_NEWS_MEDIA_DIR` (default `media/`). Nothing outside that directory
-can be published.
+</div>

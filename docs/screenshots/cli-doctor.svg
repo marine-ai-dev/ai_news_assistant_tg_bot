@@ -1,0 +1,86 @@
+<svg class="rich-terminal" viewBox="0 0 1141 342.79999999999995" xmlns="http://www.w3.org/2000/svg">
+    <!-- Generated with Rich https://www.textualize.io -->
+    <style>
+
+        
+    .terminal-454303982-matrix {
+        font-family: Fira Code, monospace;
+        font-size: 20px;
+        line-height: 24.4px;
+        font-variant-east-asian: full-width;
+    }
+
+    .terminal-454303982-title {
+        font-size: 18px;
+        font-weight: bold;
+        font-family: arial;
+    }
+
+    .terminal-454303982-r1 { fill: #c5c8c6 }
+    </style>
+
+    <defs>
+    <clipPath id="terminal-454303982-clip-terminal">
+      <rect x="0" y="0" width="1121.3999999999999" height="291.79999999999995" />
+    </clipPath>
+    <clipPath id="terminal-454303982-line-0">
+    <rect x="0" y="1.5" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-1">
+    <rect x="0" y="25.9" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-2">
+    <rect x="0" y="50.3" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-3">
+    <rect x="0" y="74.7" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-4">
+    <rect x="0" y="99.1" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-5">
+    <rect x="0" y="123.5" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-6">
+    <rect x="0" y="147.9" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-7">
+    <rect x="0" y="172.3" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-8">
+    <rect x="0" y="196.7" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-9">
+    <rect x="0" y="221.1" width="1122.4" height="24.65"/>
+            </clipPath>
+<clipPath id="terminal-454303982-line-10">
+    <rect x="0" y="245.5" width="1122.4" height="24.65"/>
+            </clipPath>
+    </defs>
+
+    <rect fill="#292929" stroke="rgba(255,255,255,0.35)" stroke-width="1" x="1" y="1" width="1139" height="340.8" rx="8"/><text class="terminal-454303982-title" fill="#c5c8c6" text-anchor="middle" x="569" y="27">$&#160;ai-news&#160;doctor</text>
+            <g transform="translate(26,22)">
+            <circle cx="0" cy="0" r="7" fill="#ff5f57"/>
+            <circle cx="22" cy="0" r="7" fill="#febc2e"/>
+            <circle cx="44" cy="0" r="7" fill="#28c840"/>
+            </g>
+        
+    <g transform="translate(9, 41)" clip-path="url(#terminal-454303982-clip-terminal)">
+    
+    <g class="terminal-454303982-matrix">
+    <text class="terminal-454303982-r1" x="0" y="20" textLength="1000.4" clip-path="url(#terminal-454303982-line-0)">&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;ai-news&#160;doctor&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;</text><text class="terminal-454303982-r1" x="1122.4" y="20" textLength="12.2" clip-path="url(#terminal-454303982-line-0)">
+</text><text class="terminal-454303982-r1" x="0" y="44.4" textLength="1000.4" clip-path="url(#terminal-454303982-line-1)">┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</text><text class="terminal-454303982-r1" x="1122.4" y="44.4" textLength="12.2" clip-path="url(#terminal-454303982-line-1)">
+</text><text class="terminal-454303982-r1" x="0" y="68.8" textLength="1000.4" clip-path="url(#terminal-454303982-line-2)">┃&#160;Check&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;┃&#160;Status&#160;┃&#160;Detail&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;┃</text><text class="terminal-454303982-r1" x="1122.4" y="68.8" textLength="12.2" clip-path="url(#terminal-454303982-line-2)">
+</text><text class="terminal-454303982-r1" x="0" y="93.2" textLength="1000.4" clip-path="url(#terminal-454303982-line-3)">┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩</text><text class="terminal-454303982-r1" x="1122.4" y="93.2" textLength="12.2" clip-path="url(#terminal-454303982-line-3)">
+</text><text class="terminal-454303982-r1" x="0" y="117.6" textLength="1000.4" clip-path="url(#terminal-454303982-line-4)">│&#160;Python&#160;version&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;3.11.6&#160;(requires&#160;&gt;=&#160;3.11)&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="117.6" textLength="12.2" clip-path="url(#terminal-454303982-line-4)">
+</text><text class="terminal-454303982-r1" x="0" y="142" textLength="1000.4" clip-path="url(#terminal-454303982-line-5)">│&#160;Configuration&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;environment=local&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="142" textLength="12.2" clip-path="url(#terminal-454303982-line-5)">
+</text><text class="terminal-454303982-r1" x="0" y="166.4" textLength="1000.4" clip-path="url(#terminal-454303982-line-6)">│&#160;Auto-publish&#160;disabled&#160;&#160;&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;every&#160;post&#160;requires&#160;explicit&#160;human&#160;approval&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="166.4" textLength="12.2" clip-path="url(#terminal-454303982-line-6)">
+</text><text class="terminal-454303982-r1" x="0" y="190.8" textLength="866.2" clip-path="url(#terminal-454303982-line-7)">│&#160;Data&#160;directory&#160;writable&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;~/ai-news/data&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="190.8" textLength="12.2" clip-path="url(#terminal-454303982-line-7)">
+</text><text class="terminal-454303982-r1" x="0" y="215.2" textLength="866.2" clip-path="url(#terminal-454303982-line-8)">│&#160;Database&#160;connectivity&#160;&#160;&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;~/ai-news/data/ai_news.sqlite3&#160;&#160;&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="215.2" textLength="12.2" clip-path="url(#terminal-454303982-line-8)">
+</text><text class="terminal-454303982-r1" x="0" y="239.6" textLength="1000.4" clip-path="url(#terminal-454303982-line-9)">│&#160;Schema&#160;up&#160;to&#160;date&#160;&#160;&#160;&#160;&#160;&#160;&#160;│&#160;OK&#160;&#160;&#160;&#160;&#160;│&#160;applied&#160;version&#160;12&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;│</text><text class="terminal-454303982-r1" x="1122.4" y="239.6" textLength="12.2" clip-path="url(#terminal-454303982-line-9)">
+</text><text class="terminal-454303982-r1" x="0" y="264" textLength="1000.4" clip-path="url(#terminal-454303982-line-10)">└─────────────────────────┴────────┴─────────────────────────────────────────────┘</text><text class="terminal-454303982-r1" x="1122.4" y="264" textLength="12.2" clip-path="url(#terminal-454303982-line-10)">
+</text><text class="terminal-454303982-r1" x="0" y="288.4" textLength="439.2" clip-path="url(#terminal-454303982-line-11)">No&#160;external&#160;services&#160;were&#160;contacted.</text><text class="terminal-454303982-r1" x="1122.4" y="288.4" textLength="12.2" clip-path="url(#terminal-454303982-line-11)">
+</text>
+    </g>
+    </g>
+</svg>
