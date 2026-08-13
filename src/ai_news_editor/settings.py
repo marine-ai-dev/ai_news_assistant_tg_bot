@@ -105,6 +105,23 @@ class Settings(BaseSettings):
         description="The call-to-action wording. The leading emoji varies per post.",
     )
 
+    @field_validator(
+        "telegram_bot_token", "telegram_channel", "telegram_owner_user_id", mode="before"
+    )
+    @classmethod
+    def _blank_means_unset(cls, value: object) -> object:
+        """Treat ``NAME=`` in a .env file as "not configured" rather than as a value.
+
+        Writing a bare key with nothing after it is the natural way to say "I have not
+        filled this in yet", and it is exactly what ``.env.example`` ships. Without this,
+        an empty owner id reaches Pydantic as ``""`` and fails integer parsing, so a
+        fresh clone that follows the README breaks on the first command with a
+        validation error about a setting the reader never set.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("telegram_channel")
     @classmethod
     def _check_channel(cls, value: str | None) -> str | None:

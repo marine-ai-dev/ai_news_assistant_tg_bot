@@ -91,3 +91,58 @@ class TestSecrets:
         assert "123456:ABCDEF" not in str(settings.telegram_bot_token)
         assert settings.telegram_bot_token is not None
         assert settings.telegram_bot_token.get_secret_value() == "123456:ABCDEF"
+
+
+class TestAFreshCloneStarts:
+    """The .env.example a newcomer copies must actually work.
+
+    This is here because a clean-room clone caught it: `.env.example` ships every
+    Telegram variable with an empty value, and an empty string is not an integer, so
+    the first command after the documented quick-start died on a validation error
+    about a setting the reader had never touched.
+    """
+
+    @pytest.mark.parametrize(
+        "variable",
+        [
+            "AI_NEWS_TELEGRAM_BOT_TOKEN",
+            "AI_NEWS_TELEGRAM_CHANNEL",
+            "AI_NEWS_TELEGRAM_OWNER_USER_ID",
+        ],
+    )
+    def test_a_blank_value_means_not_configured(
+        self, variable: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(variable, "")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert getattr(settings, variable.removeprefix("AI_NEWS_").lower()) is None
+
+    def test_whitespace_is_not_a_configured_value_either(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_TELEGRAM_OWNER_USER_ID", "   ")
+        assert Settings(_env_file=None).telegram_owner_user_id is None  # type: ignore[call-arg]
+
+    def test_the_shipped_example_env_loads(self, tmp_path: Path) -> None:
+        """Parse the real .env.example, exactly as 'cp .env.example .env' produces it."""
+        example = Path(__file__).resolve().parents[2] / ".env.example"
+        target = tmp_path / ".env"
+        target.write_text(example.read_text(), encoding="utf-8")
+
+        settings = Settings(_env_file=target)  # type: ignore[call-arg]
+
+        # It loads, and the three Telegram values are correctly seen as unset rather
+        # than as empty strings pretending to be configuration.
+        assert settings.telegram_bot_token is None
+        assert settings.telegram_channel is None
+        assert settings.telegram_owner_user_id is None
+        # And the non-secret defaults did come through, so the file is really parsed.
+        assert settings.auto_publish_enabled is False
+        assert settings.channel_handle.startswith("@")
+
+    def test_the_example_contains_no_real_secret(self) -> None:
+        """Every secret in the template is a blank placeholder, not somebody's value."""
+        example = Path(__file__).resolve().parents[2] / ".env.example"
+        for line in example.read_text(encoding="utf-8").splitlines():
+            if line.startswith(("AI_NEWS_TELEGRAM_BOT_TOKEN", "AI_NEWS_TELEGRAM_OWNER")):
+                assert line.split("=", 1)[1].strip() == "", f"{line.split('=')[0]} has a value"
