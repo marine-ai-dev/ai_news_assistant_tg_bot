@@ -12,7 +12,7 @@ engineers.
 </div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C657%20passing-2ea44f)](#-quality)
+[![Tests](https://img.shields.io/badge/tests-1%2C663%20passing-2ea44f)](#-quality)
 [![Coverage](https://img.shields.io/badge/coverage-94%25-2ea44f)](#-quality)
 [![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
 [![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
@@ -63,7 +63,7 @@ before a network call.
 | 🧩 **Partial-failure recovery** | The main post is *never* re-sent; retries fill only the gaps |
 | ❓ **UNCERTAIN-delivery protection** | An unknown outcome stops everything and calls a human |
 | 🤐 **Token redaction everywhere** | Logs, output, exceptions, database, fixtures — all scrubbed |
-| 🧪 **1,657 automated tests** | Including a safety suite that cannot be skipped by accident |
+| 🧪 **1,663 automated tests** | Including a safety suite that cannot be skipped by accident |
 
 ---
 
@@ -196,7 +196,7 @@ This is the part worth reading if you only read one thing.
 | 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
 | 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
 | 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
-| 🧪 Quality | **pytest** + **Ruff** | 1,657 tests; a safety suite that cannot be skipped |
+| 🧪 Quality | **pytest** + **Ruff** | 1,663 tests; a safety suite that cannot be skipped |
 
 **Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
 
@@ -329,7 +329,7 @@ taken back — which is why every guarantee in [safety.md](docs/safety.md) exist
 
 Measured at this commit, not aspirational:
 
-- ✅ **1,657 automated tests**, all passing
+- ✅ **1,663 automated tests**, all passing
 - ✅ **94% total coverage**
 - 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
 - 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)
