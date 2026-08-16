@@ -795,6 +795,32 @@ class TestIngestionCannotReachPublishing:
         ]
         assert offenders == []
 
+    def test_the_planning_layer_reads_but_never_writes(self) -> None:
+        """Phase 10 added a layer that reads drafts, approvals and the queue.
+
+        That is legitimate — a calendar cannot describe a week without them. What it
+        must never do is act: no approval, no scheduling, no publication. It sits at the
+        opposite end of the pipeline from ``editorial/``, which is why it is a separate
+        package rather than a module inside it.
+        """
+        forbidden = (
+            "PublishAuthorization",
+            "issue_publication_authorization",
+            "approve_draft",
+            "claim_for_publishing",
+            "set_status",
+            "queue_service.schedule",
+            "publish_draft",
+            "publish_bundle",
+        )
+        offenders = [
+            (name, term)
+            for name, text in self._layer("planning")
+            for term in forbidden
+            if term in text
+        ]
+        assert offenders == []
+
     def test_the_writing_layer_never_records_a_review_decision(self) -> None:
         """Writing creates drafts. Approving them is a human act it cannot perform."""
         offenders = [

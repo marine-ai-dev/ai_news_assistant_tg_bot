@@ -2101,3 +2101,51 @@ sentence.
 
 Deferred to Phase 10: the editorial calendar, content balance, source and tool
 diversity, and NEWCOMER balance.
+
+## 35. Phase 10 — editorial calendar and content balance
+
+The first layer in this project with an opinion about editorial decisions, and therefore
+the first place a helpful tool could quietly become an editor. Its boundaries are drawn
+in tests rather than in intentions: `planning/` may read anything and act on nothing.
+
+**No new taxonomy, no migration.** The six editorial buckets — NEWS, PRODUCT_UPDATE,
+PRACTICAL, EXPLAINER, WOW, SCIENCE — are *derived* from the `ContentType` and `Category`
+a post already carries. The Phase-4 `Category` enum already contained PRODUCT_UPDATE,
+WOW, SCIENCE_LITE and the rest, so the mapping is a function, not a column. A second
+stored taxonomy would be a second thing to keep in sync and a second thing to get wrong.
+Series metadata, tool provenance and the vendor/independent distinction likewise reuse
+what Phases 7.5–8.2 already store (`ContentItem.series_*`, `PromptEvidence.tool_used`,
+`SourceTier`, `EvidenceKind`).
+
+**A separate package from `editorial/`, deliberately.** That layer evaluates candidates
+before a draft exists and is forbidden by an existing safety test from touching drafts or
+review decisions. Planning sits at the opposite end of the pipeline and needs exactly
+those tables — so it became `planning/`, and the layering test was extended to assert it
+contains no approval, scheduling or publication call.
+
+**The queue stays the single source of truth.** The calendar is a view over Phase-9 data;
+there is no second scheduling store, and freshness reuses the Phase-9 policy rather than
+defining competing rules. What the calendar adds is the *scheduled* moment as the
+question: a news post scheduled for Friday is the one that will be stale, however fresh
+it looks today.
+
+**Diagnostics are sentences, not actions.** Audience share, bucket mix, same-bucket and
+technical streaks, a week with nothing to try, source and tool concentration, series
+ordering, a crowded resource, ageing news. Each is phrased for a person. None reorders
+anything: moving a post the owner deliberately scheduled would be worse than a crowded
+Thursday. Source concentration in particular is a signal, never a rejection — a vendor
+shipping three interesting things in a week is reporting, not bias.
+
+**Suggestions show their work.** Each candidate slot collects reasons carrying points and
+a sentence; the score is their sum and the explanation is the list. Hard blocks — a
+collision, a slot past the freshness window, a series ordering violation — carry a large
+negative so they are never the answer. Deterministic by construction, and there is no
+"best time to post": this project has no analytics data, so such a claim would be
+invented, and a test greps the output to keep it absent.
+
+Two bugs were found by the tests written for this phase: `.upper()` applied to a Rich
+markup string produced `[/BOLD]` and crashed `calendar week` as soon as anything was
+actually scheduled, and the disclaimer text itself contained the phrase the engagement
+test was grepping for.
+
+Deferred to Phase 11: analytics foundation and channel growth.

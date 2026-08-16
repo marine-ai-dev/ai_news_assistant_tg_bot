@@ -254,6 +254,72 @@ between deciding and claiming, because they are the same statement.
 
 ---
 
+## 🗓 Planning: a read-only layer that offers an opinion
+
+Phase 10 added the first layer that says *what to publish next*. That makes it the first
+place a helpful tool could quietly become an editor, so its boundaries are drawn in
+tests rather than in intentions.
+
+```mermaid
+flowchart LR
+    subgraph reads["📖 reads only"]
+        Q[("publication_queue")]
+        D[("drafts + versions")]
+        R[("review_decisions")]
+        C[("content_items")]
+        A[("articles + sources")]
+    end
+    P["🗓 planning/<br/>calendar · buckets · suggest"]
+    Q --> P
+    D --> P
+    R --> P
+    C --> P
+    A --> P
+    P --> W["⚠️ warnings<br/><i>sentences for a human</i>"]
+    P --> S["💡 slot suggestions<br/><i>with reasons</i>"]
+    W -.->|"the owner decides"| ACT["✋ ai-news queue add"]
+    S -.->|"the owner decides"| ACT
+
+    style P fill:#1f6feb,color:#fff
+    style ACT fill:#d29922,color:#000
+```
+
+`planning/` is a separate package from `editorial/` on purpose. That layer evaluates
+candidates *before* a draft exists and is forbidden by test from touching drafts or
+review decisions at all. Planning sits at the opposite end and needs exactly those
+tables. A test asserts that `planning/` contains no approval, no scheduling call and no
+publication call — it may read anything and act on nothing.
+
+### Buckets are derived, never stored
+
+```mermaid
+flowchart LR
+    CT["ContentType"] --> B{{"bucket_for()"}}
+    CA["Category"] --> B
+    B --> N["📰 NEWS"]
+    B --> P2["🚀 PRODUCT_UPDATE"]
+    B --> PR["🛠 PRACTICAL"]
+    B --> E["🧠 EXPLAINER"]
+    B --> W2["✨ WOW"]
+    B --> SC["🔬 SCIENCE"]
+```
+
+No migration, no new column, no second taxonomy to keep in sync. Content type decides
+first — a prompt is something to try whatever it is about — and category only breaks the
+tie within news.
+
+### The suggestion is arithmetic, not a model
+
+Each candidate slot collects `Reason` objects, each carrying points and a sentence. The
+score is their sum; the explanation is the list. Hard blocks (a collision, a slot past
+the freshness window, a series ordering violation) carry a large negative so they are
+never the answer, and are shown as blocked rather than merely unattractive.
+
+Given the same database and the same clock, the output is identical — which is what
+makes it something an editor can argue with rather than defer to.
+
+---
+
 ## 🗄 Storage
 
 Plain `sqlite3` from the standard library, with hand-written ordered SQL migrations and

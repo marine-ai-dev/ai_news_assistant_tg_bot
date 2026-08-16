@@ -12,7 +12,7 @@ engineers.
 </div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C834%20passing-2ea44f)](#-quality)
+[![Tests](https://img.shields.io/badge/tests-1%2C890%20passing-2ea44f)](#-quality)
 [![Coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#-quality)
 [![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
 [![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
@@ -68,7 +68,12 @@ before a network call.
 | 🌍 **Europe/Kyiv scheduling** | UTC storage, channel-time display, DST refused rather than guessed |
 | 🥬 **Freshness policy** | Per content type — news ages in hours, an explainer in a year |
 | 😴 **Overdue safety** | A sleeping Mac never wakes up and blasts yesterday's news |
-| 🧪 **1,834 automated tests** | Including a safety suite that cannot be skipped by accident |
+| 🗓 **Editorial calendar** | The week at a glance, in channel time, with what is uneven |
+| ⚖️ **Content balance** | Mix, audience, streaks and gaps — targets, never quotas |
+| 🔎 **Source & tool diversity** | Says when one publisher or one tool dominates the week |
+| 🎯 **Series order safety** | Warns when part 3 is scheduled before part 2 |
+| 💡 **Explainable slot suggestions** | Every point traced to a reason, no opaque score |
+| 🧪 **1,890 automated tests** | Including a safety suite that cannot be skipped by accident |
 
 ---
 
@@ -201,7 +206,7 @@ This is the part worth reading if you only read one thing.
 | 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
 | 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
 | 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
-| 🧪 Quality | **pytest** + **Ruff** | 1,834 tests; a safety suite that cannot be skipped |
+| 🧪 Quality | **pytest** + **Ruff** | 1,890 tests; a safety suite that cannot be skipped |
 
 **Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
 
@@ -425,11 +430,86 @@ check is re-run from scratch.
 
 ---
 
+## 🗓 Editorial Calendar & ⚖️ Content Balance
+
+A queue tells you *when* things publish. It does not tell you that four of the next five
+posts are news, that nothing this week is readable by a beginner, or that every practical
+post is about the same tool. That is what the calendar is for.
+
+```bash
+ai-news calendar week                  # the week, in Kyiv time, with what is uneven
+ai-news calendar week --next           # next week
+ai-news calendar balance               # the mix against the editorial targets
+ai-news calendar gaps                  # approved and waiting for a slot
+ai-news calendar suggest <draft-id>    # where it could go, and why
+```
+
+Every command is **read-only**. The strongest thing any of them does is print a sentence.
+
+### 🎯 The mix it watches
+
+| Bucket | Target | Roughly |
+|---|---|---|
+| 📰 NEWS | 30% | something happened worth knowing about |
+| 🚀 PRODUCT | 20% | a tool changed in a way a reader notices |
+| 🛠 PRACTICAL | 20% | a prompt, workflow or lifehack to try |
+| 🧠 EXPLAINER | 15% | one concept, no assumed background |
+| ✨ WOW | 10% | surprising, strange or cautionary |
+| 🔬 SCIENCE | 5% | the deeper end, in small doses |
+
+Plus the constraint the channel exists for: **40–50% of a week should be readable by
+someone who has never opened an AI chat.**
+
+> ⚠️ **These are targets, not quotas.** Nothing here rejects good content because a
+> percentage is imperfect, and nothing relabels a technical post `NEWCOMER` to make a
+> number tidier. They exist so six weeks of drift is visible before a reader notices it.
+
+Every bucket is **derived** from the `ContentType` and `Category` a post already carries.
+Phase 10 added no stored taxonomy and no migration — a second taxonomy is a second thing
+to keep in sync.
+
+### 🔔 What it will tell you
+
+- 🌱 *"Only 1 of 6 posts is beginner-accessible; the channel aims for 40–50%."*
+- 🔁 *"4 NEWS posts in a row around Thu 14 Aug. Consider breaking the run."*
+- 🛠 *"No prompt, use case or lifehack in the last 7 days."*
+- 🏢 *"3 of 4 sourced posts come from the same publisher — worth a second source, not a
+  reason to drop anything."*
+- 🔧 *"4 of 5 practical posts are about the same tool. Readers use different tools."*
+- 🎯 *"'7 днів AI-креативів' is scheduled out of order: parts go 2 → 1. Nothing was moved."*
+- ⏳ *"2 news posts are ageing — the earliest publishes Fri 15 Aug."*
+
+It **warns; it never rearranges.** Moving a post the owner deliberately scheduled would
+be worse than a crowded Thursday.
+
+### 💡 Suggestions that show their work
+
+`calendar suggest` proposes slots and prints the argument for each:
+
+```
+→ 15 Aug 2026 · 09:00 Europe/Kyiv    morning · score +9
+      + morning slot, currently free
+      + nothing else scheduled that day
+      + that week is short on PRACTICAL
+      + that week needs more beginner-accessible content
+      − that week is already heavy on NEWS
+```
+
+Deterministic, and every point traced to a sentence — a recommendation you cannot argue
+with is one you should ignore. It schedules nothing: it hands you the `queue add`
+command to type.
+
+> 🚫 **There is no "best time to post" here.** This project has no analytics data yet, so
+> such a claim would be invented — and the owner would then plan around a number that
+> means nothing. The slots are the configured dayparts, named after parts of the day.
+
+---
+
 ## 🧪 Quality
 
 Measured at this commit, not aspirational:
 
-- ✅ **1,834 automated tests**, all passing
+- ✅ **1,890 automated tests**, all passing
 - ✅ **93% total coverage**
 - 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
 - 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)
@@ -466,6 +546,7 @@ send, and a recorded message id.
 | 📸 Media, albums, PDFs, first comments | ✅ Working |
 | 🧩 Partial-failure and UNCERTAIN handling | ✅ Working |
 | 📅 Publication queue and local scheduler | ✅ Working |
+| 🗓 Editorial calendar and content balance | ✅ Working |
 
 This is an actively developed personal project, not a finished v1. It is public because
 the engineering is worth reading.
@@ -474,8 +555,6 @@ the engineering is worth reading.
 
 ## 🗺 Roadmap
 
-- 🗓 **Editorial calendar & content balancing** — variety across types, sources and
-  audience tiers
 - 📊 **Analytics foundation** — understand what actually helps readers
 
 > 💰 Monetization is intentionally deferred until real audience data exists.

@@ -315,3 +315,122 @@ class TestNoDangerousFlags:
         for name, sub in scheduler.commands.items():
             joined = " ".join(opt for param in sub.params for opt in param.opts)
             assert "approve" not in joined.lower(), name
+
+
+def _week_flag() -> list[str]:
+    """Which week `when()` actually lands in.
+
+    A time 30 hours out is next week when today is a Sunday, and the calendar would
+    then correctly show an empty current week. Ask for the week the post is really in
+    rather than assuming it is this one.
+    """
+    from ai_news_editor.planning.calendar import week_bounds
+
+    now = datetime.now(UTC)
+    target = now + timedelta(hours=30)
+    return [] if week_bounds(now) == week_bounds(target) else ["--next"]
+
+
+class TestCalendarCommands:
+    """The calendar reads and reports. It must never schedule."""
+
+    def test_an_empty_week_is_not_an_error(self, tmp_path: Path) -> None:
+        seed(tmp_path)
+        result = runner.invoke(app, ["calendar", "week"])
+        assert result.exit_code == 0, output_of(result)
+        assert "Europe/Kyiv" in output_of(result)
+        assert "Nothing scheduled" in output_of(result)
+
+    def test_the_week_shows_a_scheduled_post_with_its_metadata(self, tmp_path: Path) -> None:
+        draft_id = seed(tmp_path)
+        runner.invoke(app, ["queue", "add", draft_id, "--at", when()])
+
+        result = runner.invoke(app, ["calendar", "week", *_week_flag()])
+        assert result.exit_code == 0, output_of(result)
+        text = output_of(result)
+        assert "NEWS" in text
+        assert "NEWCOMER" in text or "BEGINNER" in text or "GENERAL" in text
+        assert "SCHEDULED" in text
+
+    def test_next_week_is_a_different_week(self, tmp_path: Path) -> None:
+        seed(tmp_path)
+        this_week = output_of(runner.invoke(app, ["calendar", "week"]))
+        next_week = output_of(runner.invoke(app, ["calendar", "week", "--next"]))
+        assert this_week != next_week
+
+    def test_balance_reports_the_mix_and_says_targets_are_not_quotas(
+        self, tmp_path: Path
+    ) -> None:
+        draft_id = seed(tmp_path)
+        runner.invoke(app, ["queue", "add", draft_id, "--at", when()])
+
+        result = runner.invoke(app, ["calendar", "balance", *_week_flag()])
+        assert result.exit_code == 0, output_of(result)
+        text = output_of(result)
+        assert "target" in text.lower()
+        assert "not quotas" in text
+        assert "beginner-accessible" in text
+
+    def test_gaps_lists_approved_work_without_scheduling_any_of_it(
+        self, tmp_path: Path
+    ) -> None:
+        draft_id = seed(tmp_path)
+        result = runner.invoke(app, ["calendar", "gaps"])
+
+        assert result.exit_code == 0, output_of(result)
+        assert draft_id[:8] in output_of(result)
+        assert "Approved, not scheduled" in output_of(result)
+
+        connection = connect(tmp_path)
+        assert PublicationQueueRepository(connection).list_all() == []
+        connection.close()
+
+    def test_gaps_counts_pending_review_separately(self, tmp_path: Path) -> None:
+        """Pending work is not publishable, so it never joins the calendar."""
+        seed(tmp_path, approved=False)
+        result = runner.invoke(app, ["calendar", "gaps"])
+        assert "Awaiting review (not publishable)" in output_of(result)
+
+    def test_suggest_proposes_a_time_and_schedules_nothing(self, tmp_path: Path) -> None:
+        draft_id = seed(tmp_path)
+        result = runner.invoke(app, ["calendar", "suggest", draft_id])
+
+        assert result.exit_code == 0, output_of(result)
+        text = output_of(result)
+        assert "Suggested slots" in text
+        assert "nothing has been scheduled" in text
+        # It hands the owner the command rather than running it.
+        assert "ai-news queue add" in text
+
+        connection = connect(tmp_path)
+        assert PublicationQueueRepository(connection).list_all() == []
+        connection.close()
+
+    def test_suggest_shows_its_reasoning(self, tmp_path: Path) -> None:
+        draft_id = seed(tmp_path)
+        text = output_of(runner.invoke(app, ["calendar", "suggest", draft_id]))
+        assert "slot, currently free" in text
+        assert "score" in text
+
+    def test_suggest_never_claims_a_best_posting_time(self, tmp_path: Path) -> None:
+        draft_id = seed(tmp_path)
+        text = output_of(runner.invoke(app, ["calendar", "suggest", draft_id])).lower()
+        for claim in ("best time", "optimal", "peak", "highest engagement"):
+            assert claim not in text, claim
+
+    def test_suggest_refuses_a_malformed_draft_id(self, tmp_path: Path) -> None:
+        seed(tmp_path)
+        result = runner.invoke(app, ["calendar", "suggest", "not-a-uuid"])
+        assert result.exit_code == 1
+        assert "Not a draft id" in output_of(result)
+
+    def test_no_calendar_command_can_schedule_or_approve(self) -> None:
+        """The whole group is read-only, and that is asserted rather than assumed."""
+        from typer.main import get_command
+
+        calendar = get_command(app).commands["calendar"]
+        forbidden = {"--yes", "-y", "--all", "--approve", "--approve-all", "--schedule",
+                     "--auto", "--apply", "--confirm"}
+        for name, sub in calendar.commands.items():
+            options = {opt for param in sub.params for opt in param.opts}
+            assert options & forbidden == set(), name

@@ -222,6 +222,28 @@ keyboard, so it introduced matching constraints:
 
 ---
 
+## 15. 🗓 The calendar advises and never acts
+
+Phase 10 is the first layer with an opinion about editorial decisions, so it is fenced:
+
+- **It writes nothing.** A test snapshots the queue, the drafts and the review decisions,
+  runs every calendar and suggestion function, and asserts nothing changed.
+- **It cannot approve, schedule or publish.** A layering test greps `planning/` for
+  `approve_draft`, `PublishAuthorization`, `set_status`, `schedule` and `publish_bundle`
+  and fails if any appears.
+- **It never invents metadata.** A tool is reported only when the stored provenance names
+  one. Nothing is inferred from the wording of an article.
+- **It warns rather than rearranging.** A series scheduled out of order, a crowded
+  resource, four news posts in a row — each is a sentence. Moving a post the owner
+  deliberately scheduled would be worse than the problem.
+- **It makes no engagement claims.** There is no analytics data in this project, so there
+  is no best time to post, and a test greps the output for "best time", "optimal",
+  "peak" and "engagement" to keep it that way.
+- **Targets are not quotas.** Nothing is refused for being off-percentage, and no post is
+  relabelled to make a number tidier.
+
+---
+
 ## 🧪 How this is verified
 
 The `tests/safety/` suite exists specifically for these properties, and is marked so it
