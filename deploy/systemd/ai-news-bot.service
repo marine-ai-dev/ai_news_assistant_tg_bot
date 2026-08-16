@@ -1,0 +1,52 @@
+# The private review bot: the owner's phone interface for approving content.
+#
+# Exactly one instance may ever run. Telegram allows a single getUpdates poller per
+# token and answers a second one with 409 Conflict, so both would fail intermittently
+# and neither would work properly. systemd guarantees this as long as the unit is not
+# templated and nobody starts the command by hand alongside it.
+
+[Unit]
+Description=AI News review bot (private, owner-only)
+Documentation=https://github.com/marine-ai-dev/ai_news_assistant_tg_bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ainews
+Group=ainews
+WorkingDirectory=/opt/ai-news/app
+EnvironmentFile=/etc/ai-news/env
+ExecStart=/opt/ai-news/app/.venv/bin/ai-news telegram review-bot
+
+# The bot ends its poll loop between updates on SIGTERM, so a decision already
+# recorded is never interrupted before its confirmation is sent.
+KillSignal=SIGTERM
+TimeoutStopSec=40
+
+Restart=always
+RestartSec=10
+# A crash loop is usually a missing setting rather than something a restart fixes.
+# Give up after five failures in five minutes and leave it failed, where it is visible.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Structured logs to the journal. AI_NEWS_LOG_FORMAT=json in the environment file
+# makes them machine-readable; the redaction filter keeps the token out of them.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-news-bot
+
+# The process needs its own data and media directories and nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-news/data /opt/ai-news/media
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

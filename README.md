@@ -12,7 +12,7 @@ engineers.
 </div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C890%20passing-2ea44f)](#-quality)
+[![Tests](https://img.shields.io/badge/tests-1%2C918%20passing-2ea44f)](#-quality)
 [![Coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#-quality)
 [![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
 [![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
@@ -73,7 +73,7 @@ before a network call.
 | 🔎 **Source & tool diversity** | Says when one publisher or one tool dominates the week |
 | 🎯 **Series order safety** | Warns when part 3 is scheduled before part 2 |
 | 💡 **Explainable slot suggestions** | Every point traced to a reason, no opaque score |
-| 🧪 **1,890 automated tests** | Including a safety suite that cannot be skipped by accident |
+| 🧪 **1,918 automated tests** | Including a safety suite that cannot be skipped by accident |
 
 ---
 
@@ -206,7 +206,7 @@ This is the part worth reading if you only read one thing.
 | 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
 | 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
 | 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
-| 🧪 Quality | **pytest** + **Ruff** | 1,890 tests; a safety suite that cannot be skipped |
+| 🧪 Quality | **pytest** + **Ruff** | 1,918 tests; a safety suite that cannot be skipped |
 
 **Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
 
@@ -428,6 +428,17 @@ through one, the overdue policy above decides: a short delay publishes normally,
 one holds for review. **Restarting is always safe** — the queue is in SQLite, and every
 check is re-run from scratch.
 
+### 🖧 Or on a small server
+
+Both processes run unattended under systemd, with a timer that collects news four times
+a day. No Docker, no webhook, no inbound port — the bot polls. **The server collects and
+publishes; you still write and approve**, because the editorial layer is a Claude Code
+session and there is no LLM API here to replace it.
+
+📖 **[Server deployment guide →](deploy/README.md)** — Oracle Cloud Always Free, Ubuntu,
+systemd units, and an update script that refuses to start anything if a migration or the
+health check fails.
+
 ---
 
 ## 🗓 Editorial Calendar & ⚖️ Content Balance
@@ -509,7 +520,7 @@ command to type.
 
 Measured at this commit, not aspirational:
 
-- ✅ **1,890 automated tests**, all passing
+- ✅ **1,918 automated tests**, all passing
 - ✅ **93% total coverage**
 - 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
 - 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)

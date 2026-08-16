@@ -28,9 +28,12 @@ arrive would be far worse than a missing bubble.
 
 from __future__ import annotations
 
+import signal
 import sqlite3
+import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -757,12 +760,45 @@ class ReviewBot:
         self.api.send_message(chat_id, text, keyboard=keyboard)
 
 
+@contextmanager
+def stop_on_signal() -> Iterator[threading.Event]:
+    """SIGINT and SIGTERM end the poll loop between updates, never mid-update.
+
+    A service manager restarts this process by sending SIGTERM, so without this the bot
+    is killed at whatever line it happens to be on — quite possibly between recording a
+    human's decision and telling them it worked. The decision would stand and the
+    confirmation would never arrive.
+
+    Stopping between updates costs at most one long-poll interval and leaves Telegram's
+    offset unconfirmed, which is the safe direction: an unconfirmed update is delivered
+    again, and every handler re-reads the draft before acting on it.
+    """
+    stop = threading.Event()
+    previous: dict[int, object] = {}
+
+    def handle(signum: int, _frame: object) -> None:
+        logger.info("review bot stopping", extra={"signal": signum})
+        stop.set()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        # Not the main thread: nothing to install, and the caller's own shutdown
+        # handling still applies.
+        with suppress(ValueError):  # pragma: no cover
+            previous[sig] = signal.signal(sig, handle)
+    try:
+        yield stop
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)  # type: ignore[arg-type]
+
+
 def poll(
     bot: ReviewBot,
     *,
     offset: int | None = None,
     iterations: int | None = None,
     sleep: float = 1.0,
+    stop: threading.Event | None = None,
 ) -> Iterator[int]:
     """Long-poll for updates and dispatch them. Yields each processed update id.
 
@@ -771,10 +807,13 @@ def poll(
     be delivered again.
 
     ``iterations`` bounds the loop so tests can run it; ``None`` means run until
-    interrupted.
+    interrupted. ``stop`` ends the loop cleanly at the next boundary — see
+    :func:`stop_on_signal`.
     """
     processed = 0
     while iterations is None or processed < iterations:
+        if stop is not None and stop.is_set():
+            return
         try:
             updates = bot.api.get_updates(offset)
         except AiNewsError as exc:
@@ -790,6 +829,10 @@ def poll(
             bot.handle(update)
             if isinstance(update_id, int):
                 yield update_id
+            # Between updates, not inside one: a decision already committed must not be
+            # interrupted before its confirmation is sent.
+            if stop is not None and stop.is_set():
+                return
 
         processed += 1
 

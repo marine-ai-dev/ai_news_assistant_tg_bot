@@ -211,6 +211,7 @@ def telegram_review_bot() -> None:
         discard_backlog,
         pending_summary,
         poll,
+        stop_on_signal,
     )
     from ai_news_editor.bot.session import Session
     from ai_news_editor.cli.main import open_migrated_database
@@ -254,11 +255,16 @@ def telegram_review_bot() -> None:
                 channel=settings.telegram_channel,
                 media_root=settings.resolved_media_dir,
             )
-            try:
-                for _update_id in poll(bot, offset=offset):
+            # SIGTERM as well as Ctrl-C: a service manager restarts this process by
+            # signalling it, and the loop must end between updates rather than inside
+            # one. See stop_on_signal.
+            with stop_on_signal() as stop:
+                try:
+                    for _update_id in poll(bot, offset=offset, stop=stop):
+                        pass
+                except KeyboardInterrupt:  # pragma: no cover - handler usually wins
                     pass
-            except KeyboardInterrupt:
-                console.print("\nStopped. Every decision already made is saved.")
+            console.print("\nStopped. Every decision already made is saved.")
     finally:
         connection.close()
 

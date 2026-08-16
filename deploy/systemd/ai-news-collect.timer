@@ -1,0 +1,26 @@
+# How often to look for new stories.
+#
+# Four times a day is a deliberate choice, not a technical limit. The sources are
+# news feeds and changelogs that update a few times a week; polling them every ten
+# minutes would produce the same articles, more requests, and a longer editorial
+# queue with nothing extra in it.
+#
+# Times are in the server's timezone. Set that to Europe/Kyiv (see deploy/README.md)
+# so these read the way the editor thinks about the day. Nothing in the application
+# depends on it — publication times are always resolved in Europe/Kyiv explicitly.
+
+[Unit]
+Description=Collect AI news four times a day
+Documentation=https://github.com/marine-ai-dev/ai_news_assistant_tg_bot
+
+[Timer]
+OnCalendar=07:30,11:30,15:30,19:30
+# A server that was off at 07:30 still collects when it comes back, rather than
+# waiting until 11:30.
+Persistent=true
+# Spread the load and avoid hitting every source at exactly the same second.
+RandomizedDelaySec=300
+Unit=ai-news-collect.service
+
+[Install]
+WantedBy=timers.target

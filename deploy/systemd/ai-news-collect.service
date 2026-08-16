@@ -1,0 +1,43 @@
+# One collection pass: fetch the configured sources, then turn what is new into
+# deduplicated editorial candidates.
+#
+# Deterministic and safe to repeat. Conditional GET means an unchanged feed costs a
+# 304, and deduplication means a story seen twice is stored once. Nothing here writes
+# a draft, and nothing here can publish.
+#
+# Started by ai-news-collect.timer, not enabled directly.
+
+[Unit]
+Description=AI News collection pass (fetch and process sources)
+Documentation=https://github.com/marine-ai-dev/ai_news_assistant_tg_bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ainews
+Group=ainews
+WorkingDirectory=/opt/ai-news/app
+EnvironmentFile=/etc/ai-news/env
+
+# Two steps, in order. `process` runs only if `collect` succeeded: processing a
+# half-fetched run would just have to be repeated anyway.
+ExecStart=/opt/ai-news/app/.venv/bin/ai-news collect
+ExecStart=/opt/ai-news/app/.venv/bin/ai-news process
+
+# A feed that hangs must not hold the timer's next run.
+TimeoutStartSec=600
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-news-collect
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-news/data
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -87,6 +87,54 @@ def _database_checks(path: Path) -> list[HealthCheck]:
     ]
 
 
+def _service_checks(settings: Settings) -> list[HealthCheck]:
+    """Whether the long-running processes could actually start.
+
+    Added for unattended operation. On a laptop a missing Telegram setting is normal —
+    the whole pipeline up to review works without one — so an absent configuration is
+    reported rather than failed. What *is* a failure is a half-configuration: a token
+    with no channel, or a token with no owner id. On a server those produce a process
+    that exits on startup and is restarted forever, with the real reason buried in a
+    log nobody is reading.
+
+    Local only, like every other check here. Nothing below contacts Telegram; use
+    'ai-news telegram doctor' for that.
+    """
+    token = settings.telegram_bot_token is not None
+    channel = bool(settings.telegram_channel)
+    owner = settings.telegram_owner_user_id is not None
+
+    if not token:
+        return [
+            HealthCheck(
+                "Telegram configured",
+                True,
+                "no token set - collection and review work; publishing is disabled",
+            )
+        ]
+
+    checks = [
+        HealthCheck(
+            "Scheduler ready",
+            channel,
+            "token and channel set"
+            if channel
+            else "AI_NEWS_TELEGRAM_CHANNEL is empty - 'scheduler run' will exit at startup",
+        ),
+        HealthCheck(
+            "Review bot ready",
+            owner,
+            "token and owner id set"
+            if owner
+            else (
+                "AI_NEWS_TELEGRAM_OWNER_USER_ID is empty - 'telegram review-bot' will "
+                "exit at startup. Find it with 'ai-news telegram whoami'"
+            ),
+        ),
+    ]
+    return checks
+
+
 def run_health_checks(settings: Settings) -> list[HealthCheck]:
     """Run every local check, in display order."""
     checks = [
@@ -100,6 +148,7 @@ def run_health_checks(settings: Settings) -> list[HealthCheck]:
         _data_dir_check(settings),
     ]
     checks.extend(_database_checks(settings.resolved_database_path))
+    checks.extend(_service_checks(settings))
     return checks
 
 

@@ -1,0 +1,49 @@
+# The publication scheduler.
+#
+# Publishes only queue items the owner explicitly created from content they already
+# approved, and re-checks every condition immediately before sending. It cannot
+# approve anything and it cannot choose content.
+#
+# Running two of these is safe by construction — claiming a due item is a single
+# conditional UPDATE in SQLite — but one is still the right number.
+
+[Unit]
+Description=AI News publication scheduler
+Documentation=https://github.com/marine-ai-dev/ai_news_assistant_tg_bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ainews
+Group=ainews
+WorkingDirectory=/opt/ai-news/app
+EnvironmentFile=/etc/ai-news/env
+ExecStart=/opt/ai-news/app/.venv/bin/ai-news scheduler run
+
+# The loop stops between passes, never mid-send. A send already in flight finishes
+# and is recorded before the process exits.
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-news-scheduler
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/ai-news/data /opt/ai-news/media
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
