@@ -74,15 +74,23 @@ class TestDataDir:
 
 
 class TestSecrets:
-    def test_the_telegram_token_is_the_only_credential(self) -> None:
-        """One secret in the whole application. Everything else needs no credential."""
+    def test_only_two_credentials_exist(self) -> None:
+        """The Telegram token, and — since the GitHub Actions automation pipeline —
+        the Gemini API key. Nothing else in this application needs a credential.
+
+        This used to assert exactly one. It now asserts exactly two, deliberately: the
+        automated NEWS pipeline calls the Gemini Developer API, which needs its own
+        key, distinct from the Telegram token and never sent to Telegram or logged
+        alongside it. See test_no_claude_or_openai_credential_exists for the invariant
+        that still holds unconditionally — no OTHER model provider ever gets one.
+        """
         forbidden = {"api_key", "token", "secret", "password"}
         credential_fields = {
             field
             for field in Settings.model_fields
             if any(word in field for word in forbidden)
         }
-        assert credential_fields == {"telegram_bot_token"}
+        assert credential_fields == {"telegram_bot_token", "gemini_api_key"}
 
     def test_the_token_is_a_secret_string(self) -> None:
         """SecretStr, so printing settings or a traceback cannot leak it."""
@@ -108,6 +116,7 @@ class TestAFreshCloneStarts:
             "AI_NEWS_TELEGRAM_BOT_TOKEN",
             "AI_NEWS_TELEGRAM_CHANNEL",
             "AI_NEWS_TELEGRAM_OWNER_USER_ID",
+            "AI_NEWS_GEMINI_API_KEY",
         ],
     )
     def test_a_blank_value_means_not_configured(
@@ -136,13 +145,17 @@ class TestAFreshCloneStarts:
         assert settings.telegram_bot_token is None
         assert settings.telegram_channel is None
         assert settings.telegram_owner_user_id is None
+        assert settings.gemini_api_key is None
         # And the non-secret defaults did come through, so the file is really parsed.
         assert settings.auto_publish_enabled is False
+        assert settings.automation_enabled is False
         assert settings.channel_handle.startswith("@")
 
     def test_the_example_contains_no_real_secret(self) -> None:
         """Every secret in the template is a blank placeholder, not somebody's value."""
         example = Path(__file__).resolve().parents[2] / ".env.example"
         for line in example.read_text(encoding="utf-8").splitlines():
-            if line.startswith(("AI_NEWS_TELEGRAM_BOT_TOKEN", "AI_NEWS_TELEGRAM_OWNER")):
+            if line.startswith(
+                ("AI_NEWS_TELEGRAM_BOT_TOKEN", "AI_NEWS_TELEGRAM_OWNER", "AI_NEWS_GEMINI_API_KEY")
+            ):
                 assert line.split("=", 1)[1].strip() == "", f"{line.split('=')[0]} has a value"

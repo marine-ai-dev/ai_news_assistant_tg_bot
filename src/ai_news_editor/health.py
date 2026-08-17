@@ -135,6 +135,38 @@ def _service_checks(settings: Settings) -> list[HealthCheck]:
     return checks
 
 
+def _automation_checks(settings: Settings) -> list[HealthCheck]:
+    """Whether the unattended NEWS pipeline (``ai-news auto``) could actually run.
+
+    Local and lightweight, like every other check here: it reads settings, never calls
+    Gemini. A missing key is normal when the kill switch is off — most environments
+    (a laptop, a review-only deployment) never need one — so that case is reported, not
+    failed. What *is* a failure is the kill switch being on with no key: a scheduled
+    GitHub Actions run would fail closed on every single invocation, silently, until
+    someone reads its logs.
+    """
+    if not settings.automation_enabled:
+        return [
+            HealthCheck(
+                "Automation configured",
+                True,
+                "AI_NEWS_AUTOMATION_ENABLED is not set - the unattended NEWS pipeline "
+                "will not run",
+            )
+        ]
+
+    has_key = settings.gemini_api_key is not None
+    return [
+        HealthCheck(
+            "Gemini configured",
+            has_key,
+            f"model={settings.llm_model}"
+            if has_key
+            else "AI_NEWS_GEMINI_API_KEY is empty - 'ai-news auto' will fail closed",
+        ),
+    ]
+
+
 def run_health_checks(settings: Settings) -> list[HealthCheck]:
     """Run every local check, in display order."""
     checks = [
@@ -149,6 +181,7 @@ def run_health_checks(settings: Settings) -> list[HealthCheck]:
     ]
     checks.extend(_database_checks(settings.resolved_database_path))
     checks.extend(_service_checks(settings))
+    checks.extend(_automation_checks(settings))
     return checks
 
 

@@ -26,6 +26,15 @@ _PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsk-ant-[A-Za-z0-9_-]{16,}\b"),
     # Authorization headers
     re.compile(r"(?i)\b(?:bearer|token)\s+[A-Za-z0-9._~+/=-]{12,}"),
+    # Google API keys: a distinctive "AIzaSy" prefix, 39 chars total. The Gemini REST
+    # contract's canonical curl example authenticates via ?key=<value> in the URL
+    # (https://ai.google.dev/api/generate-content, verified live) — this application
+    # uses the x-goog-api-key header instead specifically so the key never reaches a
+    # URL, but an httpx exception can still print a request line built by the library
+    # itself, and the generic KEY=value pattern below requires a KEY-shaped variable
+    # name that a bare "?key=" query string does not have. This pattern matches the key
+    # by its own shape, independent of what named it.
+    re.compile(r"\bAIzaSy[A-Za-z0-9_-]{33}\b"),
     # key=value / key: value forms for anything that names itself a secret
     re.compile(
         r"(?i)\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_?KEY)[A-Z0-9_]*)\s*[=:]\s*"

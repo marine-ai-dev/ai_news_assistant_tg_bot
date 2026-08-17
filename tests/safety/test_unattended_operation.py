@@ -212,8 +212,53 @@ class TestDoctorGuardsTheDeployment:
         """Adding service checks must not have made doctor reach the network."""
         source = Path(__file__).resolve().parents[2] / "src/ai_news_editor/health.py"
         text = source.read_text(encoding="utf-8")
-        for forbidden in ("httpx", "requests", "urlopen", "TelegramClient", "socket"):
+        for forbidden in ("httpx", "requests", "urlopen", "TelegramClient", "GeminiClient",
+                          "socket"):
             assert forbidden not in text, forbidden
+
+    def test_automation_off_is_not_a_failure(self, tmp_path: Path) -> None:
+        """The kill switch being off is the default, healthy state, not a warning."""
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        db.migrate(connection)
+        connection.close()
+
+        checks = run_health_checks(self._settings(tmp_path, automation_enabled=False))
+        assert all_ok(checks)
+        automation = next(c for c in checks if c.name == "Automation configured")
+        assert automation.ok
+        assert "AI_NEWS_AUTOMATION_ENABLED" in automation.detail
+
+    def test_automation_on_without_a_gemini_key_fails_the_health_check(
+        self, tmp_path: Path
+    ) -> None:
+        """Otherwise a scheduled run fails closed on every invocation, unnoticed."""
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        db.migrate(connection)
+        connection.close()
+
+        checks = run_health_checks(
+            self._settings(tmp_path, automation_enabled=True, gemini_api_key=None)
+        )
+        gemini = next(c for c in checks if c.name == "Gemini configured")
+        assert not gemini.ok
+        assert "AI_NEWS_GEMINI_API_KEY" in gemini.detail
+        assert not all_ok(checks)
+
+    def test_automation_on_with_a_key_reports_the_model(self, tmp_path: Path) -> None:
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        db.migrate(connection)
+        connection.close()
+
+        key = "AIzaSy" + "z" * 33
+        checks = run_health_checks(
+            self._settings(
+                tmp_path, automation_enabled=True, gemini_api_key=key,
+                llm_model="gemini-test-model",
+            )
+        )
+        gemini = next(c for c in checks if c.name == "Gemini configured")
+        assert gemini.ok
+        assert "gemini-test-model" in gemini.detail
 
 
 class TestDeploymentArtefacts:

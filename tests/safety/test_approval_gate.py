@@ -637,8 +637,13 @@ class TestNoIntegrationsExist:
         assert offenders == [], "selectolax is the single HTML parser"
 
     def test_html_parsing_is_confined_to_its_layers(self) -> None:
-        """Only the HTML adapter and the text normalizer parse markup."""
-        allowed = {"sources/html_changelog.py", "pipeline/text.py"}
+        """Only the HTML adapter, the text normalizer, and the automation full-text
+        fetcher parse markup. The last one is new: the automated NEWS pipeline needs
+        the readable text of one selected article, not a listing page, so it is a
+        distinct module from the changelog adapter above it — but it is still firmly
+        inside the sources layer, and still selectolax, never a second parser.
+        """
+        allowed = {"sources/html_changelog.py", "pipeline/text.py", "sources/fulltext.py"}
         offenders = [
             name for name, text in self._sources() if "selectolax" in text and name not in allowed
         ]
@@ -653,6 +658,12 @@ class TestNoIntegrationsExist:
             "cli/main.py",
             # Phase 7: the only other outbound boundary, and the only one that writes.
             "publishing/telegram.py",
+            # The automation pipeline's third and last outbound boundary: the Gemini
+            # REST client. sources/fulltext.py deliberately does NOT need adding here —
+            # it reaches the network through sources/http.py's HttpClient, not httpx
+            # directly, so it stays inside the one existing HTTP boundary rather than
+            # opening a new one.
+            "automation/gemini.py",
         }
         import re
 
@@ -706,8 +717,11 @@ class TestNoIntegrationsExist:
         ]
         assert offenders == []
 
-    def test_the_only_credential_is_the_telegram_token(self) -> None:
-        """One secret in the whole application, and it is not for a model provider."""
+    def test_only_two_credentials_exist_here_too(self) -> None:
+        """Same invariant as test_settings.py::test_only_two_credentials_exist, checked
+        again from this file's own inventory of every source file — Telegram and
+        Gemini, and nothing else, anywhere in the application.
+        """
         from ai_news_editor.settings import Settings
 
         credential_fields = {
@@ -715,17 +729,25 @@ class TestNoIntegrationsExist:
             for name in Settings.model_fields
             if any(word in name for word in ("api_key", "token", "secret", "password"))
         }
-        assert credential_fields == {"telegram_bot_token"}
+        assert credential_fields == {"telegram_bot_token", "gemini_api_key"}
 
-    def test_no_model_provider_credential_exists(self) -> None:
-        """Running the editorial and writing workflow still requires no API key."""
+    def test_no_claude_or_openai_credential_exists(self) -> None:
+        """The human editorial and writing workflow still requires no API key at all.
+
+        Gemini is the one sanctioned exception (automation.gemini, gated by
+        AI_NEWS_AUTOMATION_ENABLED) — see test_settings.py::test_only_two_credentials_exist
+        for that boundary. This test is what stays absolute: no Claude API key, no
+        OpenAI key, and no other provider ever gets a credential field, automated or
+        not — the editorial and writing layers for PROMPT/TESTED_USE_CASE content stay
+        exactly what they always were, a Claude Code session with no API integration.
+        """
         from ai_news_editor.settings import Settings
 
         for field in Settings.model_fields:
-            assert "api_key" not in field
-            assert "llm" not in field
             assert "openai" not in field
             assert "anthropic" not in field
+            assert "claude" not in field
+            assert "codex" not in field
 
     def test_no_model_weights_are_referenced(self) -> None:
         forbidden = (".safetensors", ".gguf", ".onnx", "from_pretrained", "hf_hub_download")

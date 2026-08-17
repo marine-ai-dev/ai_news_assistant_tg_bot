@@ -12,7 +12,7 @@ engineers.
 </div>
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Tests](https://img.shields.io/badge/tests-1%2C918%20passing-2ea44f)](#-quality)
+[![Tests](https://img.shields.io/badge/tests-1%2C946%20passing-2ea44f)](#-quality)
 [![Coverage](https://img.shields.io/badge/coverage-93%25-2ea44f)](#-quality)
 [![Publication gate](https://img.shields.io/badge/publication%20gate-100%25%20covered-8957e5)](docs/safety.md)
 [![Ruff](https://img.shields.io/badge/ruff-clean-261230?logo=ruff&logoColor=white)](https://docs.astral.sh/ruff/)
@@ -29,9 +29,15 @@ storage, delivery. A **Claude Code session acts as the editor and writer**, exch
 JSON with the application. And no piece of content reaches the channel unless a person
 has read that exact text and said yes to it.
 
-> 🚫 **There is no external LLM API and no API key in this project.**
-> Claude Code is the editorial *operator*, not a dependency. There is no auto-publish
-> code path, and the setting that would enable one is rejected at startup.
+> 🚫 **For prompts and use cases, there is no external LLM API and no API key.**
+> Claude Code is the editorial *operator* for `PROMPT` and `TESTED_USE_CASE` content,
+> not a dependency — and there is no auto-publish code path for that content; the
+> setting that would enable one is rejected at startup.
+>
+> `NEWS` is the one exception, and it is opt-in and off by default: a narrow,
+> [separately gated pipeline](#-automated-news-pipeline-opt-in-off-by-default) lets
+> GitHub Actions call the Gemini API to select and write from official sources — every
+> post still passes through the same validation and approval gate a human draft does.
 
 The interesting engineering here is not "call a model and post the result". It is
 everything that makes the answer to *"could something unapproved ever reach the channel?"*
@@ -73,7 +79,8 @@ before a network call.
 | 🔎 **Source & tool diversity** | Says when one publisher or one tool dominates the week |
 | 🎯 **Series order safety** | Warns when part 3 is scheduled before part 2 |
 | 💡 **Explainable slot suggestions** | Every point traced to a reason, no opaque score |
-| 🧪 **1,918 automated tests** | Including a safety suite that cannot be skipped by accident |
+| 🤖 **Automated NEWS pipeline (opt-in, off by default)** | GitHub Actions + Gemini select and write from official sources; the same gate and validation as a human draft |
+| 🧪 **1,946 automated tests** | Including a safety suite that cannot be skipped by accident |
 
 ---
 
@@ -188,6 +195,11 @@ This is the part worth reading if you only read one thing.
 - 🧾 **External content is untrusted data.** Stored, quoted, attributed — never executed.
 - 🤐 **The token is nowhere.** `SecretStr` plus a log filter that scrubs token-shaped
   strings from every record, including non-string values.
+- 🤖 **Automation is fail-closed, not fail-open.** A kill switch checked before any
+  Gemini call or Telegram send; missing full article text, a low-confidence answer, or
+  a source-URL mismatch is a quiet no-op, never a best-guess post. Every automated
+  approval goes through the same `approve_draft` gate a human uses, recorded under the
+  actor `gemini:auto` — never a second, parallel publish path.
 
 📖 **[Full safety documentation →](docs/safety.md)**
 
@@ -205,10 +217,16 @@ This is the part worth reading if you only read one thing.
 | 📰 Feeds | **feedparser** | The RSS/Atom zoo, handled |
 | 🔍 HTML | **selectolax** | Fast changelog parsing and text extraction |
 | 📣 Delivery | **Telegram Bot API 10.2** | Verified against live docs, not from memory |
-| 🧠 Editorial | **Claude Code** | The operator — no API client, no key |
-| 🧪 Quality | **pytest** + **Ruff** | 1,918 tests; a safety suite that cannot be skipped |
+| 🧠 Editorial (`PROMPT`, `TESTED_USE_CASE`) | **Claude Code** | The operator — no API client, no key |
+| 🤖 Editorial (`NEWS`, opt-in) | **Gemini Developer API** | REST, header-based auth; off unless explicitly enabled |
+| ⚙️ Automation scheduler | **GitHub Actions** | No server, no VPS — a scheduled workflow run, then it exits |
+| 🧪 Quality | **pytest** + **Ruff** | 1,946 tests; a safety suite that cannot be skipped |
 
-**Zero LLM dependencies. Zero cloud dependencies. Zero paid services.**
+**No paid infrastructure required.** The human-in-the-loop workflow runs from a laptop; a
+small VPS (see [`deploy/`](deploy/)) is only for keeping the review bot and local
+scheduler always-on, and is unrelated to automation. The only external API call this
+project can ever make *unattended* is the opt-in `NEWS` pipeline below, and it runs
+serverless — a scheduled GitHub Actions job, not a standing process.
 
 ---
 
@@ -516,11 +534,80 @@ command to type.
 
 ---
 
+## 🤖 Automated NEWS pipeline (opt-in, off by default)
+
+Everything above this section is a human deciding, with tools that help. This section is
+the one place a machine can, under narrow conditions, publish without anyone watching —
+so it gets a section of its own rather than a footnote.
+
+**What it automates, and what it does not.** Only `NEWS` — a short post built from one
+article at one configured `OFFICIAL`-trust-tier source. `PROMPT` and `TESTED_USE_CASE`
+are untouched: nothing here selects, writes or approves either of them, ever.
+
+**How one run works**, end to end, stopping at the first step with nothing to do:
+
+```text
+collect (existing RSS/Atom/changelog sources)
+  → normalize & deduplicate (existing pipeline)
+  → select one candidate           (Gemini, choosing only by id from a numbered list)
+  → fetch the full article text    (selectolax; too short or unreachable → stop, no guess)
+  → write the post                 (Gemini, grounded only in that fetched text)
+  → validate                       (the same DraftResult/Evaluation contract every draft uses)
+  → approve                        (the same approve_draft() gate a human approval calls,
+                                     actor recorded as "gemini:auto" — never a human's name)
+  → publish                        (the same prepare_publication/publish_bundle every
+                                     other publisher in this project uses)
+```
+
+**Fail-closed, not best-guess.** A source with too little fetched text, a Gemini
+rejection, a low self-reported confidence, or a generated post whose URL doesn't match
+the article it was given — each of these stops the run quietly (exit 0, nothing
+written) rather than publishing something uncertain. Genuine infrastructure failures
+(a malformed API response, an exhausted retry budget) exit non-zero instead, so a
+scheduled workflow only turns red for something actually worth looking at.
+
+**Three modes, one code path:**
+
+| Mode | Selects & writes | Approves & persists | Sends to |
+|---|---|---|---|
+| `--dry-run` | ✅ | ❌ nothing is written | nowhere |
+| `--test` | ✅ | ✅ | `AI_NEWS_TEST_CHANNEL` |
+| *(default)* `live` | ✅ | ✅ | `AI_NEWS_TELEGRAM_CHANNEL` |
+
+```bash
+ai-news auto once --dry-run   # proves the prompts and validation; touches nothing
+ai-news auto once --test      # the real pipeline, sent to a private test channel
+ai-news auto once             # production — still refuses to run unless enabled below
+ai-news auto stats            # how much gemini:auto activity is on record
+```
+
+**Off unless you turn it on, explicitly:**
+
+```bash
+AI_NEWS_AUTOMATION_ENABLED=false   # the default. Any non-explicitly-truthy value is "off".
+```
+
+Checked before any Gemini call or Telegram send — first, before configuration is even
+read. A scheduled run with the switch off is a no-op that says so, not a failure.
+
+**Where it runs.** A `.github/workflows/ai-news-publish.yml` GitHub Actions job, on a
+schedule and via manual `workflow_dispatch` — never a standing process, never a
+permanent bot polling in Actions. Dedup state is a SQLite file committed back to the
+repo by the workflow itself, guarded by a `concurrency` group so two runs can never
+race. Secrets (`AI_NEWS_GEMINI_API_KEY`, `AI_NEWS_TELEGRAM_BOT_TOKEN`,
+`AI_NEWS_TELEGRAM_CHANNEL`, `AI_NEWS_TEST_CHANNEL`) live only in GitHub Actions
+Secrets — never in this repo, never in a log line.
+
+**Status:** implemented and tested behind the kill switch; not yet enabled in
+production. See [Project Status](#-project-status) below.
+
+---
+
 ## 🧪 Quality
 
 Measured at this commit, not aspirational:
 
-- ✅ **1,918 automated tests**, all passing
+- ✅ **1,946 automated tests**, all passing
 - ✅ **93% total coverage**
 - 🛡 **`publishing/gate.py` — 100% coverage** (the module that decides what may publish)
 - 🛡 **Rich publication path — 100%** (`plan.py`, `rich.py`, `telegram.py`)
@@ -558,6 +645,7 @@ send, and a recorded message id.
 | 🧩 Partial-failure and UNCERTAIN handling | ✅ Working |
 | 📅 Publication queue and local scheduler | ✅ Working |
 | 🗓 Editorial calendar and content balance | ✅ Working |
+| 🤖 Automated NEWS pipeline (GitHub Actions + Gemini) | 🧪 Implemented, tests passing, **disabled by default** — pending secret configuration and a verified test-channel run before it is ever enabled in production |
 
 This is an actively developed personal project, not a finished v1. It is public because
 the engineering is worth reading.

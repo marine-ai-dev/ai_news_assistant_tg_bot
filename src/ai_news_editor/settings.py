@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ai_news_editor.domain.errors import ConfigurationError
@@ -105,8 +105,61 @@ class Settings(BaseSettings):
         description="The call-to-action wording. The leading emoji varies per post.",
     )
 
+    test_channel: str | None = Field(
+        default=None,
+        description=(
+            "A second destination, separate from telegram_channel, for a real send "
+            "nobody but the owner reads. Same validation and the same publications "
+            "table — a channel is just a string this application sends to, so no "
+            "schema change was needed to keep test and production history apart."
+        ),
+    )
+
+    # -- GitHub Actions NEWS automation ---------------------------------------
+    #
+    # A second, narrower kill switch from auto_publish_enabled above. That flag is a
+    # blanket rejection with no code path behind it at all — it exists so a human
+    # publish flow can never be made unattended by flipping a setting. This one gates a
+    # deliberately built, narrower thing: NEWS only, sourced only from configured
+    # OFFICIAL sources, approved under a distinguishable actor, subject to a daily cap.
+    # The two flags are unrelated on purpose; this module never touches the other one.
+    automation_enabled: bool = Field(
+        default=False,
+        description=(
+            "Kill switch for unattended NEWS generation and publishing. Checked before "
+            "any Gemini call or Telegram send. Anything other than an explicit truthy "
+            "value is treated as off."
+        ),
+    )
+    gemini_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Google AI Studio API key for the Gemini Developer API. SecretStr, like the "
+            "Telegram token; never logged, never stored, never printed."
+        ),
+    )
+    llm_model: str = Field(
+        default="gemini-3.6-flash",
+        description=(
+            "The Gemini model id, e.g. 'models/gemini-3.6-flash'. Read from config at "
+            "call time — never hard-coded as the only possible value — so a model "
+            "rename or a deliberate switch needs no code change."
+        ),
+    )
+    daily_post_limit: int = Field(
+        default=3,
+        ge=0,
+        description=(
+            "Maximum automated NEWS publications per Europe/Kyiv calendar day, counted "
+            "across every workflow run that day. A scheduled run past the limit is a "
+            "safe no-op, not an error."
+        ),
+    )
+
     @field_validator(
-        "telegram_bot_token", "telegram_channel", "telegram_owner_user_id", mode="before"
+        "telegram_bot_token", "telegram_channel", "telegram_owner_user_id", "test_channel",
+        "gemini_api_key",
+        mode="before",
     )
     @classmethod
     def _blank_means_unset(cls, value: object) -> object:
@@ -122,29 +175,31 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("telegram_channel")
+    @field_validator("telegram_channel", "test_channel")
     @classmethod
-    def _check_channel(cls, value: str | None) -> str | None:
+    def _check_channel(cls, value: str | None, info: ValidationInfo) -> str | None:
         """Catch a destination that Telegram will certainly reject, at startup.
 
         A channel configured as bare text ("my_channel") silently resolves to nothing
-        useful; better to say so before a human is standing at a publish prompt.
+        useful; better to say so before a human is standing at a publish prompt. Shared
+        between telegram_channel and test_channel, so the error names whichever setting
+        the reader actually got wrong rather than always naming the first one.
         """
         if value is None:
             return None
         trimmed = value.strip()
         if not trimmed:
             return None
+        setting = f"AI_NEWS_{info.field_name.upper()}"
         if trimmed.startswith("@"):
             if len(trimmed) < 2:
-                raise ValueError("AI_NEWS_TELEGRAM_CHANNEL is just '@'")
+                raise ValueError(f"{setting} is just '@'")
             return trimmed
         try:
             int(trimmed)
         except ValueError:
             raise ValueError(
-                "AI_NEWS_TELEGRAM_CHANNEL must be a public @username or a numeric chat "
-                f"id, got {trimmed!r}"
+                f"{setting} must be a public @username or a numeric chat id, got {trimmed!r}"
             ) from None
         return trimmed
 

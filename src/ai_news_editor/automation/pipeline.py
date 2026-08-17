@@ -1,0 +1,557 @@
+"""One unattended run, start to finish: the order in section 15 exists to be read here.
+
+``run_automation`` is the whole story. Every step before "approve" only *reads*; nothing
+is written to storage until a Gemini-written post has passed the same
+:class:`~writing.schema.DraftResult` validation a human-written one passes, and nothing
+is approved until that Draft exists through the same
+:func:`~writing.import_results.import_drafts` a human-imported batch goes through.
+Publication uses :func:`~publishing.service.prepare_publication` and
+:func:`~publishing.service.publish_bundle` exactly as configured — this module contains
+no Telegram call of its own, and could not add one without duplicating machinery that
+already handles exactly-once delivery, partial-bundle recovery and uncertain outcomes
+correctly.
+
+Every early-exit path returns a normal :class:`AutomationResult`, not an exception. A
+scheduled run that finds nothing to publish is success: nothing was wrong, there was
+simply nothing to do. Only a genuine infrastructure failure — Gemini unreachable after
+retries, a missing key, a database that will not open — is allowed to look like failure
+to whatever is watching the exit code.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from typing import Literal
+from uuid import UUID
+
+from ai_news_editor.automation.gemini import GeminiClient, GeminiError
+from ai_news_editor.automation.provider import (
+    DEFAULT_CONFIDENCE_THRESHOLD,
+    GenerationRejected,
+    SelectionInvalid,
+    SelectionRejected,
+    generate_post,
+    select_candidate,
+)
+from ai_news_editor.automation.schema import MAX_SELECTION_CANDIDATES, SelectionCandidate
+from ai_news_editor.domain.clock import now_utc
+from ai_news_editor.domain.enums import (
+    ArticleStatus,
+    AudienceTier,
+    Category,
+    EditorialDecision,
+    EvaluatorType,
+    PostFormat,
+    TrustTier,
+    VerificationStatus,
+)
+from ai_news_editor.domain.errors import AiNewsError
+from ai_news_editor.domain.models import Article, Evaluation
+from ai_news_editor.editorial.export import build_excerpt, fingerprint_for
+from ai_news_editor.editorial.rubric import (
+    RUBRIC_VERSION,
+    composite_score,
+    passes_credibility_gate,
+)
+from ai_news_editor.editorial.rubric import (
+    SCHEMA_VERSION as EDITORIAL_SCHEMA_VERSION,
+)
+from ai_news_editor.observability.logging import get_logger
+from ai_news_editor.publishing.gate import approve_draft
+from ai_news_editor.publishing.service import prepare_publication, publish_bundle
+from ai_news_editor.publishing.telegram import TelegramClient
+from ai_news_editor.scheduling.clock import CHANNEL_TIMEZONE, to_local
+from ai_news_editor.settings import Settings
+from ai_news_editor.sources.fulltext import fetch_fulltext
+from ai_news_editor.storage.repositories import (
+    ArticleRepository,
+    DraftRepository,
+    EvaluationRepository,
+    PublicationRepository,
+    ReviewDecisionRepository,
+    SourceRepository,
+)
+from ai_news_editor.writing.export import eligibility_problem
+from ai_news_editor.writing.import_results import DraftImportError, import_drafts
+from ai_news_editor.writing.schema import (
+    STYLE_VERSION,
+    WRITING_SCHEMA_VERSION,
+    DraftBatch,
+    DraftResult,
+)
+
+logger = get_logger(__name__)
+
+#: Who a Gemini-produced approval is recorded as. Distinct from every human actor string
+#: this project has ever used, on purpose — see docs/safety.md.
+AUTOMATION_ACTOR = "gemini:auto"
+
+Mode = Literal["dry-run", "test", "live"]
+
+#: How many candidates are looked at before giving up and calling it a quiet run. Small
+#: and deterministic, matching the selection prompt's own bound.
+CANDIDATE_LIMIT = MAX_SELECTION_CANDIDATES
+
+#: Automation's own fixed classification for the Evaluation it creates. Not something
+#: Gemini is asked for (see automation.schema's module docstring for why the schema
+#: stays this narrow) and not something this pipeline tries to infer per-story: every
+#: eligible candidate already comes from a configured OFFICIAL vendor source, which is
+#: structurally a product-news category, and the generation prompt already instructs
+#: Gemini to write for a reader who may never have opened an AI chat tool — NEWCOMER
+#: matches that instruction rather than contradicting it. A known simplification,
+#: documented rather than hidden; see the Phase report for the alternative considered.
+AUTOMATION_CATEGORY = Category.PRODUCT_UPDATE
+AUTOMATION_AUDIENCE = AudienceTier.NEWCOMER
+
+#: Fixed rubric inputs for an automated evaluation, run through the *same* weights and
+#: gate every human/Claude evaluation uses (editorial.rubric). Not a second scoring
+#: system: the values are constants chosen to represent "passed every automated safety
+#: and grounding check this pipeline enforces", not a nuanced per-story judgement — this
+#: pipeline has no basis for judging novelty or wow-factor, and does not pretend to.
+_AUTOMATION_SCORES: dict[str, int] = {
+    "credibility": 85,  # official vendor source, by construction of this pipeline
+    "general_ai_relevance": 85,  # every configured source is an AI vendor/platform
+    "reader_interest": 55,
+    "usefulness": 55,
+    "novelty": 50,
+    "wow_factor": 40,
+    "virality_potential": 40,
+    "accessibility": 60,
+    "consumer_impact": 55,
+}
+
+
+class Outcome(StrEnum):
+    """Why a run ended the way it did. Exactly one per run."""
+
+    PUBLISHED = "PUBLISHED"
+    DRY_RUN_COMPLETE = "DRY_RUN_COMPLETE"
+    DISABLED = "DISABLED"
+    DAILY_LIMIT_REACHED = "DAILY_LIMIT_REACHED"
+    NO_CANDIDATE = "NO_CANDIDATE"
+    SELECTION_REJECTED = "SELECTION_REJECTED"
+    FULLTEXT_UNAVAILABLE = "FULLTEXT_UNAVAILABLE"
+    GENERATION_REJECTED = "GENERATION_REJECTED"
+    VALIDATION_FAILED = "VALIDATION_FAILED"
+    CONFIG_ERROR = "CONFIG_ERROR"
+    GEMINI_ERROR = "GEMINI_ERROR"
+    PUBLISH_ERROR = "PUBLISH_ERROR"
+
+
+#: Outcomes that mean "nothing was wrong, there was simply nothing to publish" — a
+#: scheduled run ending here is success, and the CLI exits 0.
+QUIET_OUTCOMES = frozenset(
+    {
+        Outcome.DRY_RUN_COMPLETE,
+        Outcome.DISABLED,
+        Outcome.DAILY_LIMIT_REACHED,
+        Outcome.NO_CANDIDATE,
+        Outcome.SELECTION_REJECTED,
+        Outcome.FULLTEXT_UNAVAILABLE,
+        Outcome.GENERATION_REJECTED,
+        Outcome.VALIDATION_FAILED,
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationResult:
+    """What one run decided, and why. Never raised as an exception for a normal no-op."""
+
+    outcome: Outcome
+    detail: str
+    candidates_considered: int = 0
+    draft_id: UUID | None = None
+    message_id: int | None = None
+    channel: str | None = None
+
+    @property
+    def published(self) -> bool:
+        return self.outcome is Outcome.PUBLISHED
+
+    @property
+    def is_quiet(self) -> bool:
+        """Whether this is a normal no-op rather than something worth a nonzero exit."""
+        return self.outcome in QUIET_OUTCOMES
+
+
+def run_automation(
+    connection,  # sqlite3.Connection — left unannotated to avoid importing sqlite3 solely
+    settings: Settings,
+    *,
+    mode: Mode,
+    now: datetime | None = None,
+    run_id: str | None = None,
+) -> AutomationResult:
+    """Run the whole pipeline once. Publishes at most one post, or none.
+
+    ``mode`` controls two things and nothing else: whether Telegram is contacted at all
+    (never, for ``"dry-run"``), and which channel receives the send when it is
+    (``settings.test_channel`` for ``"test"``, ``settings.telegram_channel`` for
+    ``"live"``). Selection, generation and validation run identically in all three —
+    a dry run proves the same prompts and the same checks a live run would use, not an
+    approximation of them.
+    """
+    moment = now or now_utc()
+    run_id = run_id or uuid.uuid4().hex[:12]
+
+    # 1. Kill switch, first, before anything else is even inspected.
+    if not settings.automation_enabled:
+        return AutomationResult(
+            Outcome.DISABLED,
+            "AI_NEWS_AUTOMATION_ENABLED is not set to a truthy value; nothing was done.",
+        )
+
+    # 2. Configuration, fail-closed and specific about what is missing.
+    if settings.gemini_api_key is None:
+        return AutomationResult(Outcome.CONFIG_ERROR, "AI_NEWS_GEMINI_API_KEY is not set.")
+    if settings.telegram_bot_token is None:
+        return AutomationResult(Outcome.CONFIG_ERROR, "AI_NEWS_TELEGRAM_BOT_TOKEN is not set.")
+    target_channel = settings.test_channel if mode == "test" else settings.telegram_channel
+    if mode != "dry-run" and not target_channel:
+        missing = "AI_NEWS_TEST_CHANNEL" if mode == "test" else "AI_NEWS_TELEGRAM_CHANNEL"
+        return AutomationResult(Outcome.CONFIG_ERROR, f"{missing} is not set.")
+
+    # 3. Daily limit — scoped to the production channel only. A test-channel publish is
+    # invisible to real readers and must not consume the day's live budget, and a
+    # deliberate manual test should never be blocked by automated activity earlier in
+    # the day either.
+    if mode == "live":
+        published_today = _production_publications_today(connection, settings, moment)
+        if published_today >= settings.daily_post_limit:
+            return AutomationResult(
+                Outcome.DAILY_LIMIT_REACHED,
+                f"{published_today} of {settings.daily_post_limit} automated posts already "
+                f"published today ({to_local(moment, CHANNEL_TIMEZONE):%d %b, Europe/Kyiv}).",
+            )
+
+    # 4. Collection and normalization already happened — see run_once in cli.auto,
+    # which calls collect() and process() before this function, exactly as a human
+    # would run 'ai-news collect && ai-news process' before reviewing. Keeping that
+    # network I/O out of this function is deliberate: everything from here on is a
+    # pure function of what is already in the database, which is what makes it
+    # possible to test selection, generation, validation and approval against a
+    # seeded database with no HTTP mocking for feed collection at all.
+
+    # 5. Build the eligible candidate list: NORMALIZED, from an OFFICIAL source, not
+    # already drafted, not already evaluated by anyone (human or automated).
+    candidates, by_id = _eligible_candidates(connection)
+    if not candidates:
+        return AutomationResult(
+            Outcome.NO_CANDIDATE, "no eligible NEWS candidate from an official source."
+        )
+
+    # 6. Select. A rejection or an invalid answer is a quiet, successful no-op — the
+    # infrastructure worked; there was simply nothing worth publishing today.
+    try:
+        with GeminiClient(
+            settings.gemini_api_key.get_secret_value(), model=settings.llm_model
+        ) as client:
+            try:
+                selection = select_candidate(client, candidates)
+            except SelectionRejected as exc:
+                return AutomationResult(
+                    Outcome.SELECTION_REJECTED, exc.reason, candidates_considered=len(candidates)
+                )
+            except SelectionInvalid as exc:
+                return AutomationResult(
+                    Outcome.SELECTION_REJECTED, str(exc), candidates_considered=len(candidates)
+                )
+
+            # 7. Full text. Fail-closed: no usable article text, no generation attempt.
+            fulltext = fetch_fulltext(selection.candidate.url)
+            if not fulltext.ok:
+                return AutomationResult(
+                    Outcome.FULLTEXT_UNAVAILABLE,
+                    f"{selection.candidate.url}: {fulltext.reason}",
+                    candidates_considered=len(candidates),
+                )
+
+            # 8. Generate.
+            try:
+                post = generate_post(
+                    client,
+                    candidate=selection.candidate,
+                    article_text=fulltext.text or "",
+                    confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD,
+                )
+            except GenerationRejected as exc:
+                return AutomationResult(
+                    Outcome.GENERATION_REJECTED, exc.reason, candidates_considered=len(candidates)
+                )
+    except GeminiError as exc:
+        return AutomationResult(
+            Outcome.GEMINI_ERROR, str(exc), candidates_considered=len(candidates)
+        )
+
+    article = by_id[selection.candidate.id]
+
+    # 9. Canonical validation — pure, in-memory, and identical in every mode. Nothing
+    # has touched storage yet.
+    try:
+        validated = _validate_post(connection, article, post, run_id=run_id)
+    except (DraftImportError, AiNewsError) as exc:
+        return AutomationResult(
+            Outcome.VALIDATION_FAILED, str(exc), candidates_considered=len(candidates)
+        )
+
+    if mode == "dry-run":
+        # Nothing was written: no Evaluation row, no Draft row, no approval, no send.
+        # A validated-but-never-persisted DraftResult is the proof this mode exists to
+        # produce — everything up to and including the canonical DraftResult validator
+        # ran, and stops here.
+        return AutomationResult(
+            Outcome.DRY_RUN_COMPLETE,
+            f"validated a post for {article.canonical_url}; nothing was written, "
+            "approved or sent.",
+            candidates_considered=len(candidates),
+        )
+
+    # 10. Storage. The only place either the Evaluation or the Draft is written.
+    try:
+        draft_id = _persist(connection, validated)
+    except (DraftImportError, AiNewsError) as exc:
+        return AutomationResult(
+            Outcome.VALIDATION_FAILED, str(exc), candidates_considered=len(candidates)
+        )
+
+    # 11. Approve, through the one function that can mint an authorization.
+    drafts = DraftRepository(connection)
+    version = drafts.current_version(draft_id)
+    try:
+        approve_draft(
+            connection, draft_id, actor=AUTOMATION_ACTOR, expected_version_id=version.id
+        )
+    except AiNewsError as exc:  # pragma: no cover - defensive; import_drafts already left
+        # the draft in PENDING_REVIEW with this exact version current
+        return AutomationResult(
+            Outcome.VALIDATION_FAILED, f"approval failed: {exc}", draft_id=draft_id
+        )
+
+    # 12. Publish, through the same production path every other publisher in this
+    # project uses. No Telegram call exists in this module.
+    assert target_channel is not None  # checked in step 2
+    assert settings.telegram_bot_token is not None  # checked in step 2
+    try:
+        with TelegramClient(settings.telegram_bot_token.get_secret_value()) as client:
+            plan = prepare_publication(
+                connection, draft_id, channel=target_channel,
+                media_root=settings.resolved_media_dir,
+            )
+            publication = publish_bundle(
+                connection, plan, client, media_root=settings.resolved_media_dir
+            )
+    except Exception as exc:
+        logger.error(
+            "automated publication failed",
+            extra={"draft_id": str(draft_id), "channel": target_channel, "mode": mode},
+        )
+        return AutomationResult(
+            Outcome.PUBLISH_ERROR, str(exc), draft_id=draft_id, channel=target_channel
+        )
+
+    logger.info(
+        "automated publication succeeded",
+        extra={
+            "draft_id": str(draft_id),
+            "channel": target_channel,
+            "message_id": publication.message_id,
+            "mode": mode,
+        },
+    )
+    return AutomationResult(
+        Outcome.PUBLISHED,
+        f"published to {target_channel}.",
+        candidates_considered=len(candidates),
+        draft_id=draft_id,
+        message_id=publication.message_id,
+        channel=target_channel,
+    )
+
+
+def _eligible_candidates(
+    connection,
+) -> tuple[list[SelectionCandidate], dict[str, Article]]:
+    """NORMALIZED articles from an OFFICIAL source, not already drafted or evaluated.
+
+    Bounded to CANDIDATE_LIMIT and ordered newest-first, matching the selection
+    prompt's own instruction to favour recent stories.
+    """
+    articles_repo = ArticleRepository(connection)
+    sources_repo = SourceRepository(connection)
+    drafts_repo = DraftRepository(connection)
+    evaluations_repo = EvaluationRepository(connection)
+
+    sources = {source.id: source for source in sources_repo.list_all()}
+    normalized = articles_repo.list_by_status(ArticleStatus.NORMALIZED, limit=200)
+    normalized.sort(key=lambda a: a.published_at or a.created_at, reverse=True)
+
+    candidates: list[SelectionCandidate] = []
+    by_id: dict[str, Article] = {}
+    for article in normalized:
+        if len(candidates) >= CANDIDATE_LIMIT:
+            break
+        source = sources.get(article.source_id)
+        if source is None or source.trust_tier is not TrustTier.OFFICIAL:
+            continue
+        if drafts_repo.find_by_article(article.id) is not None:
+            continue
+        if evaluations_repo.latest_for_article(article.id) is not None:
+            continue
+
+        candidate_id = str(len(candidates) + 1)
+        excerpt, _truncated = build_excerpt(article.clean_text)
+        candidates.append(
+            SelectionCandidate(
+                id=candidate_id,
+                source_name=source.publisher or source.name,
+                title=article.title,
+                published_at=article.published_at.isoformat() if article.published_at else None,
+                url=article.canonical_url,
+                summary=excerpt,
+            )
+        )
+        by_id[candidate_id] = article
+
+    return candidates, by_id
+
+
+@dataclass(frozen=True, slots=True)
+class _Validated:
+    """A post that has passed every canonical check, not yet written anywhere.
+
+    Building this touches no storage at all — every check inside it is a pure function
+    over objects already in memory (Pydantic's own validators, and
+    ``eligibility_problem``, which takes an ``Evaluation`` instance rather than reading
+    one back from the database). That is what makes a true dry run possible: the exact
+    validation a live run would perform runs to completion, and nothing is persisted
+    either way unless the caller goes on to call :func:`_persist`.
+    """
+
+    evaluation: Evaluation
+    draft_result: DraftResult
+    batch: DraftBatch
+
+
+def _validate_post(connection, article: Article, post, *, run_id: str) -> _Validated:
+    """Build and validate the Evaluation and DraftResult this post would become.
+
+    Raises:
+        DraftImportError: the constructed DraftResult failed canonical validation, or
+            the article changed underneath the fingerprint since it was selected, or
+            it already has an evaluation or a draft — checked here too, not only by
+            the eligibility filter that built the candidate list, because time may
+            have passed since that list was built.
+    """
+    excerpt, _truncated = build_excerpt(article.clean_text)
+    fingerprint = fingerprint_for(article, excerpt)
+
+    source_repo = SourceRepository(connection)
+    source = source_repo.get(article.source_id)
+    label = source.publisher or source.name
+
+    evaluation = Evaluation(
+        article_id=article.id,
+        schema_version=EDITORIAL_SCHEMA_VERSION,
+        rubric_version=RUBRIC_VERSION,
+        evaluator_type=EvaluatorType.AUTOMATED,
+        evaluator=AUTOMATION_ACTOR,
+        batch_id=run_id,
+        content_fingerprint=fingerprint,
+        decision=EditorialDecision.SHORTLIST,
+        category=AUTOMATION_CATEGORY,
+        audience=AUTOMATION_AUDIENCE,
+        scores=dict(_AUTOMATION_SCORES),
+        composite_score=composite_score(_AUTOMATION_SCORES),
+        verification_status=VerificationStatus.NOT_REQUIRED,
+        why_selected=(f"automated selection, confidence {post.confidence}",),
+        notes=None,
+    )
+    if not passes_credibility_gate(_AUTOMATION_SCORES):  # pragma: no cover - fixed constants
+        raise DraftImportError(["automation's own fixed scores failed the credibility gate"])
+
+    # The same eligibility rule a human import obeys, checked here against the
+    # in-memory evaluation this call is about to propose — not one read back from
+    # storage, because nothing has been written yet.
+    drafts_repo = DraftRepository(connection)
+    problem = eligibility_problem(
+        article, evaluation, has_draft=drafts_repo.find_by_article(article.id) is not None
+    )
+    if problem:
+        raise DraftImportError([f"article {article.id}: {problem}"])
+
+    # DraftResult's own validator runs on construction: URL safety, blank text,
+    # disallowed markup, the Telegram length limit. A ValidationError here is exactly
+    # as final as any of the DraftImportError cases above.
+    try:
+        draft_result = DraftResult(
+            article_id=article.id,
+            evaluation_id=evaluation.id,
+            article_fingerprint=fingerprint,
+            post_format=PostFormat.STANDARD,
+            headline=post.headline or "",
+            body=post.body or "",
+            source_label=label,
+            source_url=article.canonical_url,
+            writer_notes=(
+                *tuple(post.factual_claims)[:7], f"gemini confidence: {post.confidence}"
+            ),
+        )
+    except ValueError as exc:
+        raise DraftImportError([f"article {article.id}: {exc}"]) from exc
+
+    batch = DraftBatch(
+        schema_version=WRITING_SCHEMA_VERSION,
+        style_version=STYLE_VERSION,
+        batch_id=run_id,
+        writer=AUTOMATION_ACTOR,
+        drafts=[draft_result],
+    )
+    return _Validated(evaluation=evaluation, draft_result=draft_result, batch=batch)
+
+
+def _persist(connection, validated: _Validated) -> UUID:
+    """Write the Evaluation and the Draft it authorises. The only place either is saved.
+
+    Two calls, not one transaction — see the module-level note in run_automation's
+    docstring on why: ``DraftRepository.create``, reached through ``import_drafts``
+    below, opens its own transaction internally, and this project's ``transaction()``
+    helper does not support nesting. The evaluation insert is a single autocommitted
+    statement, matching how ``EvaluationRepository.add`` is called everywhere else in
+    this codebase.
+
+    The residual risk this accepts: a crash between the two calls leaves a SHORTLIST
+    evaluation with no draft. That article is not lost — ``eligibility_problem`` already
+    lets a human pick it up through the ordinary ``ai-news draft export`` path exactly as
+    if it had been shortlisted by a Claude Code session — it is only excluded from a
+    *later automated* attempt, by the same "already evaluated" check every candidate is
+    filtered through.
+    """
+    EvaluationRepository(connection).add(validated.evaluation)
+    report = import_drafts(connection, validated.batch)
+    return report.draft_ids[0]
+
+
+def _production_publications_today(connection, settings: Settings, moment: datetime) -> int:
+    """How many gemini:auto posts already reached the production channel today."""
+    if not settings.telegram_channel:
+        return 0
+    publications = PublicationRepository(connection)
+    decisions = ReviewDecisionRepository(connection)
+    day = to_local(moment, CHANNEL_TIMEZONE).date()
+
+    count = 0
+    for publication in publications.list_recent(limit=200):
+        if publication.channel != settings.telegram_channel:
+            continue
+        if publication.status.value != "SUCCEEDED" or publication.published_at is None:
+            continue
+        if to_local(publication.published_at, CHANNEL_TIMEZONE).date() != day:
+            continue
+        decision = decisions.get(publication.review_decision_id)
+        if decision.actor == AUTOMATION_ACTOR:
+            count += 1
+    return count

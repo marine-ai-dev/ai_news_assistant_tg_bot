@@ -1,0 +1,166 @@
+name: AI News — automated NEWS publish
+
+# Serverless by design: no VPS, no standing process, no external scheduler. This job
+# runs, does at most one thing, and exits — same contract as `ai-news auto once` has
+# from a terminal. See the "Automated NEWS pipeline" section of the README before
+# changing anything here.
+#
+# Scope, unconditionally: NEWS only, from a configured OFFICIAL source, gated by
+# AI_NEWS_AUTOMATION_ENABLED (checked first, inside the application, regardless of
+# `mode` below — this workflow cannot bypass that switch by picking "live").
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: >-
+          dry-run: select + write, approve/publish nothing.
+          test: full pipeline, sent to AI_NEWS_TEST_CHANNEL.
+          live: full pipeline, sent to AI_NEWS_TELEGRAM_CHANNEL.
+        type: choice
+        options: [dry-run, test, live]
+        default: dry-run
+  schedule:
+    # 08:00 UTC, Mon–Fri. GitHub Actions cron has no timezone concept, so this drifts
+    # between 10:00 and 11:00 Europe/Kyiv across the DST boundary rather than holding a
+    # fixed local time — accepted rather than worked around, same as the local
+    # scheduler's own documented DST policy (see README § Europe/Kyiv scheduling).
+    # Scheduled runs always use mode "live" (still subject to the kill switch above).
+    - cron: "0 8 * * 1-5"
+
+# Nothing here needs more than pushing the state commit back to this same repo.
+permissions:
+  contents: write
+
+# Never two runs racing over the same SQLite state file. A scheduled run and a manual
+# dispatch overlapping must queue, not run concurrently — and never cancel a run that
+# may already be mid-publish, which is why cancel-in-progress is false, not true.
+concurrency:
+  group: ai-news-publish
+  cancel-in-progress: false
+
+env:
+  # Durable state lives in the repo itself, committed back by this workflow — not in
+  # actions/cache (which GitHub can evict any time and offers no consistency guarantee)
+  # and not in an external database. Deliberately a different path from the local
+  # `data/` dev directory, which stays git-ignored.
+  AI_NEWS_DATA_DIR: automation_state
+  AI_NEWS_ENVIRONMENT: github-actions
+
+jobs:
+  automate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve mode
+        id: mode
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            mode="${{ inputs.mode }}"
+          else
+            mode="live"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+
+          case "$mode" in
+            dry-run) echo "flag=--dry-run" >> "$GITHUB_OUTPUT" ;;
+            test)    echo "flag=--test" >> "$GITHUB_OUTPUT" ;;
+            live)    echo "flag=" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::Unknown mode '$mode'"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install
+        run: pip install .
+
+      - name: Initialize / migrate database
+        run: ai-news db init
+
+      - name: Health check
+        # Fails closed before spending a single Gemini call if configuration is
+        # inconsistent — same discipline deploy/update.sh already applies locally.
+        #
+        # Deliberately does NOT set AI_NEWS_TELEGRAM_BOT_TOKEN here: doctor's
+        # "Scheduler ready" / "Review bot ready" checks are about the interactive
+        # review bot and local scheduler, neither of which this workflow runs, and
+        # both require a channel/owner id this job never configures. Passing the
+        # token without them would fail doctor on checks that do not apply here. The
+        # automation pipeline validates its own Telegram token requirement separately
+        # (a missing token is a normal CONFIG_ERROR outcome from `auto once`, not a
+        # doctor concern).
+        run: ai-news doctor
+        env:
+          AI_NEWS_AUTOMATION_ENABLED: ${{ vars.AI_NEWS_AUTOMATION_ENABLED }}
+          AI_NEWS_GEMINI_API_KEY: ${{ secrets.AI_NEWS_GEMINI_API_KEY }}
+
+      - name: Run automation
+        id: run
+        # Exit 0 covers every normal outcome, including "nothing to publish today" and
+        # "the kill switch is off" — a red run here means a genuine infrastructure
+        # failure, not a quiet day.
+        run: ai-news auto once ${{ steps.mode.outputs.flag }}
+        env:
+          AI_NEWS_AUTOMATION_ENABLED: ${{ vars.AI_NEWS_AUTOMATION_ENABLED }}
+          AI_NEWS_GEMINI_API_KEY: ${{ secrets.AI_NEWS_GEMINI_API_KEY }}
+          AI_NEWS_LLM_MODEL: ${{ vars.AI_NEWS_LLM_MODEL }}
+          AI_NEWS_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_NEWS_TELEGRAM_BOT_TOKEN }}
+          AI_NEWS_TELEGRAM_CHANNEL: ${{ secrets.AI_NEWS_TELEGRAM_CHANNEL }}
+          AI_NEWS_TEST_CHANNEL: ${{ secrets.AI_NEWS_TEST_CHANNEL }}
+
+      - name: Persist automation state
+        # Runs even if the step above failed (e.g. a Telegram send error after a draft
+        # was already approved) so that state is never silently lost between ephemeral
+        # runners — but never for a dry run, which by contract writes nothing to
+        # persist in the first place (see automation/pipeline.py's mode handling).
+        if: ${{ always() && steps.mode.outputs.mode != 'dry-run' }}
+        run: |
+          set -euo pipefail
+          DB_PATH="automation_state/ai_news.sqlite3"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Force-add exactly this one file. Never `git add -A`: this repo's
+          # .gitignore deliberately excludes data/ and *.sqlite3 everywhere else, and
+          # a broad add here would be the one command capable of committing something
+          # that was never meant to be tracked.
+          git add -f "$DB_PATH"
+
+          if git diff --cached --quiet; then
+            echo "No automation state changes to commit."
+            exit 0
+          fi
+
+          # Refuse to commit anything the run touched other than its own state file —
+          # a surprise here means something in this job wrote where it should not have.
+          unexpected="$(git status --short | grep -v -F "$DB_PATH" || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected tracked changes outside $DB_PATH:"
+            echo "$unexpected"
+            exit 1
+          fi
+
+          git commit -m "chore(automation): persist AI news state (run ${{ github.run_id }})"
+
+          attempt=0
+          until git pull --rebase --autostash origin "${{ github.ref_name }}" \
+              && git push origin "HEAD:${{ github.ref_name }}"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 3 ]; then
+              echo "::error::Failed to push automation state after $attempt attempts."
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+      - name: Report outcome
+        if: always()
+        run: |
+          echo "Mode: ${{ steps.mode.outputs.mode }}"
+          echo "Pipeline step outcome: ${{ steps.run.outcome }}"
