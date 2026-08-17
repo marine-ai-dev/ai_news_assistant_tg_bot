@@ -568,11 +568,11 @@ scheduled workflow only turns red for something actually worth looking at.
 
 **Three modes, one code path:**
 
-| Mode | Selects & writes | Approves & persists | Sends to |
-|---|---|---|---|
-| `--dry-run` | ✅ | ❌ nothing is written | nowhere |
-| `--test` | ✅ | ✅ | `AI_NEWS_TEST_CHANNEL` |
-| *(default)* `live` | ✅ | ✅ | `AI_NEWS_TELEGRAM_CHANNEL` |
+| Mode | Selects & writes | Approves & persists | Sends to | Needs the kill switch? |
+|---|---|---|---|---|
+| `--dry-run` | ✅ | ❌ nothing is written, anywhere | nowhere | ❌ no |
+| `--test` | ✅ | ✅, but only in a throwaway in-memory copy of the database — see below | `AI_NEWS_TEST_CHANNEL` | ❌ no |
+| *(default)* `live` | ✅ | ✅, for real | `AI_NEWS_TELEGRAM_CHANNEL` | ✅ yes |
 
 ```bash
 ai-news auto once --dry-run   # proves the prompts and validation; touches nothing
@@ -581,14 +581,27 @@ ai-news auto once             # production — still refuses to run unless enabl
 ai-news auto stats            # how much gemini:auto activity is on record
 ```
 
-**Off unless you turn it on, explicitly:**
+**Test-channel isolation.** `--test` runs the real pipeline — real selection, real
+generation, real validation, a real approval, a real Telegram send — but its writes
+(the Evaluation, the Draft, the approval, the Publication row) land in an in-memory copy
+of the database made at the start of that one run, never the real one. A manual test
+send can never make an article unavailable to a later live run, count against the live
+daily limit, or leave a Publication record a human reading production history would
+mistake for a real one. Only the Telegram message itself is real, which is the point.
+
+**Off unless you turn it on, explicitly — and only `live` (and the schedule, which is
+always `live`) checks it at all:**
 
 ```bash
 AI_NEWS_AUTOMATION_ENABLED=false   # the default. Any non-explicitly-truthy value is "off".
 ```
 
-Checked before any Gemini call or Telegram send — first, before configuration is even
-read. A scheduled run with the switch off is a no-op that says so, not a failure.
+`--dry-run` and `--test` both run regardless of this setting — a manual dry run or a
+manual test-channel send must keep working while it stays `false`, which is this
+project's expected steady state once the schedule exists: nobody should have to arm the
+same switch that makes the *cron* start publishing for real, just to prove a prompt
+still works. A scheduled or live run with the switch off is a quiet no-op, not a
+failure.
 
 **Where it runs.** A `.github/workflows/ai-news-publish.yml` GitHub Actions job, on a
 schedule and via manual `workflow_dispatch` — never a standing process, never a

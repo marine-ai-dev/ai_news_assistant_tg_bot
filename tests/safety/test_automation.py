@@ -307,6 +307,64 @@ class TestKillSwitch:
         result = run_automation(connection, settings, mode="live")
         assert result.outcome is Outcome.DISABLED
 
+    def test_dry_run_ignores_the_kill_switch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A manual dry-run dispatch must keep working while the switch stays off —
+        that is this project's expected steady state once the schedule exists."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path, automation_enabled=False)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=None,
+        )
+        result = run_automation(connection, settings, mode="dry-run")
+        assert result.outcome is Outcome.DRY_RUN_COMPLETE
+        assert result.outcome is not Outcome.DISABLED
+
+    def test_test_mode_ignores_the_kill_switch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A manual test-channel dispatch must also keep working while the switch
+        stays off — only 'live' (and a schedule, which is always 'live') checks it."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path, automation_enabled=False)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="test")
+        assert result.outcome is Outcome.PUBLISHED
+        assert result.channel == settings.test_channel
+
+    def test_live_mode_proceeds_once_the_switch_is_on(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path, automation_enabled=True)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="live")
+        assert result.outcome is Outcome.PUBLISHED
+        assert result.channel == settings.telegram_channel
+
 
 class TestConfiguration:
     def test_missing_gemini_key_fails_closed(self, tmp_path: Path) -> None:
@@ -823,3 +881,149 @@ class TestSuccessfulPublication:
         second = run_automation(connection, settings, mode="live")
         assert second.outcome is Outcome.NO_CANDIDATE
         assert PublicationRepository(connection).count() == 1
+
+
+class TestTestModeIsolation:
+    """``--test`` runs the real pipeline against a throwaway, in-memory copy of the
+    database (see run_automation's isolation branch) — every one of these proves a
+    real Telegram send to the test channel leaves the real, on-disk database exactly
+    as it was, so a manual test dispatch can never make an article unavailable to a
+    later live run, count against the live daily limit, or leave a Publication record
+    a human reading production history would mistake for a real one.
+    """
+
+    def test_test_mode_writes_nothing_to_the_real_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        before = snapshot(connection)
+
+        result = run_automation(connection, settings, mode="test")
+
+        # The pipeline ran for real — a real Evaluation, Draft, approval and
+        # Publication were created and a real Telegram send happened — none of it
+        # just visible on the real connection, because none of it landed there.
+        assert result.outcome is Outcome.PUBLISHED
+        assert result.draft_id is not None
+        assert snapshot(connection) == before, (
+            "a --test run must leave the real database byte-for-byte as it found it"
+        )
+
+    def test_test_mode_creates_no_production_publication_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="test")
+        assert result.outcome is Outcome.PUBLISHED
+        assert PublicationRepository(connection).count() == 0
+        assert EvaluationRepository(connection).count() == 0
+        assert DraftRepository(connection).list_all(limit=10) == []
+        assert ReviewDecisionRepository(connection).count() == 0
+
+    def test_test_mode_does_not_consume_the_candidate_for_a_later_live_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The defining property: the exact same article, tested and then not
+        re-seeded, is still eligible and gets genuinely selected and published by a
+        live run immediately afterward — a test send never 'eats' a candidate."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        test_result = run_automation(connection, settings, mode="test")
+        assert test_result.outcome is Outcome.PUBLISHED
+        assert test_result.channel == settings.test_channel
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        live_result = run_automation(connection, settings, mode="live")
+        assert live_result.outcome is Outcome.PUBLISHED
+        assert live_result.channel == settings.telegram_channel
+        assert PublicationRepository(connection).count() == 1
+
+    def test_test_mode_does_not_consume_the_production_daily_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Belt-and-suspenders alongside the isolation test above: even with the
+        production daily limit set to its most restrictive possible value, a test
+        send followed immediately by a live run for the same article still succeeds —
+        proving the test send truly consumed none of that budget."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path, daily_post_limit=1)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        test_result = run_automation(connection, settings, mode="test")
+        assert test_result.outcome is Outcome.PUBLISHED
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        live_result = run_automation(connection, settings, mode="live")
+        assert live_result.outcome is Outcome.PUBLISHED, (
+            "the daily limit of 1 must still have its full budget after a test send"
+        )
+
+    def test_the_callers_connection_object_is_never_closed_by_test_mode(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The real connection must remain open and usable after a --test run — only
+        run_automation's own throwaway in-memory copy is ever closed."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        run_automation(connection, settings, mode="test")
+        # Would raise sqlite3.ProgrammingError on a closed connection.
+        assert connection.execute("SELECT 1").fetchone()[0] == 1

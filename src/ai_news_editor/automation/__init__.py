@@ -1,4 +1,6 @@
-"""Unattended NEWS generation and publishing, gated by ``AI_NEWS_AUTOMATION_ENABLED``.
+"""Unattended NEWS generation and publishing. Live publishing is gated by
+``AI_NEWS_AUTOMATION_ENABLED``; a dry run or a send to the private test channel is not —
+see :func:`~ai_news_editor.automation.pipeline.run_automation`'s docstring for why.
 
 Everything downstream of collection and deduplication in this package is new; nothing
 upstream of it is. Selection and writing were, until this package existed, work only a

@@ -20,6 +20,7 @@ to whatever is watching the exit code.
 
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -179,7 +180,7 @@ class AutomationResult:
 
 
 def run_automation(
-    connection,  # sqlite3.Connection — left unannotated to avoid importing sqlite3 solely
+    connection: sqlite3.Connection,
     settings: Settings,
     *,
     mode: Mode,
@@ -188,18 +189,37 @@ def run_automation(
 ) -> AutomationResult:
     """Run the whole pipeline once. Publishes at most one post, or none.
 
-    ``mode`` controls two things and nothing else: whether Telegram is contacted at all
-    (never, for ``"dry-run"``), and which channel receives the send when it is
-    (``settings.test_channel`` for ``"test"``, ``settings.telegram_channel`` for
-    ``"live"``). Selection, generation and validation run identically in all three —
-    a dry run proves the same prompts and the same checks a live run would use, not an
+    ``mode`` controls three things:
+
+    * whether Telegram is contacted at all (never, for ``"dry-run"``), and which
+      channel receives the send when it is (``settings.test_channel`` for ``"test"``,
+      ``settings.telegram_channel`` for ``"live"``).
+    * whether ``AI_NEWS_AUTOMATION_ENABLED`` is even consulted — it gates ``"live"``
+      only (see step 1 below). ``"dry-run"`` and ``"test"`` both have to be runnable
+      by hand, from a ``workflow_dispatch``, while the switch stays off — that is the
+      steady state this project expects once a scheduled job exists, and nobody should
+      have to temporarily arm the setting that makes the *cron* start publishing just
+      to prove a prompt still works.
+    * which database this run actually writes to. ``"live"`` writes to the connection
+      it was given, same as always. ``"test"`` writes to a throwaway, in-memory copy of
+      it instead (step 2b) — a manual test send must never make a candidate unavailable
+      to a later live run, count against the live daily limit, or leave a Publication
+      record a human reviewing production history would mistake for a real one. Only
+      Telegram sees a real side effect in this mode: the message actually lands in the
+      test channel, which is the entire point of running it.
+
+    Selection, generation and validation run identically in all three modes — a dry
+    run proves the same prompts and the same checks a live run would use, not an
     approximation of them.
     """
     moment = now or now_utc()
     run_id = run_id or uuid.uuid4().hex[:12]
 
-    # 1. Kill switch, first, before anything else is even inspected.
-    if not settings.automation_enabled:
+    # 1. Kill switch. Live only — see the mode docstring above for why dry-run and
+    # test do not check this at all. A scheduled run is always "live" (cli/auto.py and
+    # the GitHub Actions workflow both hard-code that), so this is also what actually
+    # gates the cron.
+    if mode == "live" and not settings.automation_enabled:
         return AutomationResult(
             Outcome.DISABLED,
             "AI_NEWS_AUTOMATION_ENABLED is not set to a truthy value; nothing was done.",
@@ -215,8 +235,52 @@ def run_automation(
         missing = "AI_NEWS_TEST_CHANNEL" if mode == "test" else "AI_NEWS_TELEGRAM_CHANNEL"
         return AutomationResult(Outcome.CONFIG_ERROR, f"{missing} is not set.")
 
-    # 3. Daily limit — scoped to the production channel only. A test-channel publish is
-    # invisible to real readers and must not consume the day's live budget, and a
+    # 2b. Test-mode isolation. Everything from here on reads and writes through
+    # `connection` — for "test", that name is rebound to a fresh, in-memory copy of the
+    # real database (SQLite's own backup API, page-for-page), so every read below still
+    # sees genuine production dedup state (an article a live run already drafted stays
+    # excluded), but every write from here on — the Evaluation, the Draft, the
+    # approval, the Publication row — lands only in that copy and is discarded when
+    # this function returns. The caller's own connection is never written to, and never
+    # closed, in this mode.
+    ephemeral: sqlite3.Connection | None = None
+    if mode == "test":
+        ephemeral = sqlite3.connect(":memory:", isolation_level=None)
+        ephemeral.row_factory = sqlite3.Row
+        ephemeral.execute("PRAGMA foreign_keys = ON")
+        connection.backup(ephemeral)
+        connection = ephemeral
+
+    try:
+        return _run_pipeline(
+            connection, settings, mode=mode, moment=moment, run_id=run_id,
+            target_channel=target_channel,
+        )
+    finally:
+        if ephemeral is not None:
+            ephemeral.close()
+
+
+def _run_pipeline(
+    connection: sqlite3.Connection,
+    settings: Settings,
+    *,
+    mode: Mode,
+    moment: datetime,
+    run_id: str,
+    target_channel: str | None,
+) -> AutomationResult:
+    """Steps 3 onward — everything that happens once the mode's database is settled.
+
+    Split out of :func:`run_automation` only so that function's own job — deciding the
+    kill switch, configuration, and which database this run actually writes to — stays
+    readable as one block, before any candidate is even looked at. ``connection`` here
+    may be the caller's real database or ``run_automation``'s in-memory test copy;
+    nothing below this line can tell the difference, which is exactly the point.
+    """
+    # 3. Daily limit — scoped to the production channel and to live mode only. Test
+    # mode has no real Publication rows to find here regardless (see the isolation
+    # branch above — everything it writes lives in a copy that gets discarded), and a
     # deliberate manual test should never be blocked by automated activity earlier in
     # the day either.
     if mode == "live":

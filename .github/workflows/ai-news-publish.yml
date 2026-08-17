@@ -5,9 +5,16 @@ name: AI News — automated NEWS publish
 # from a terminal. See the "Automated NEWS pipeline" section of the README before
 # changing anything here.
 #
-# Scope, unconditionally: NEWS only, from a configured OFFICIAL source, gated by
-# AI_NEWS_AUTOMATION_ENABLED (checked first, inside the application, regardless of
-# `mode` below — this workflow cannot bypass that switch by picking "live").
+# Scope, unconditionally: NEWS only, from a configured OFFICIAL source.
+#
+# AI_NEWS_AUTOMATION_ENABLED gates LIVE publishing only — checked inside the
+# application (automation/pipeline.py), not here. dry-run and test both run
+# regardless of it, on purpose: a manual workflow_dispatch must be able to prove a
+# prompt or send a real test-channel message while the switch stays off, which is
+# this project's expected steady state once the schedule below exists. The schedule
+# itself always resolves to mode "live" (see the Resolve mode step) and so is always
+# subject to the switch — this workflow cannot make the cron publish by picking a
+# different mode, because the schedule trigger never reads `mode` at all.
 
 on:
   workflow_dispatch:
@@ -114,11 +121,19 @@ jobs:
           AI_NEWS_TEST_CHANNEL: ${{ secrets.AI_NEWS_TEST_CHANNEL }}
 
       - name: Persist automation state
-        # Runs even if the step above failed (e.g. a Telegram send error after a draft
-        # was already approved) so that state is never silently lost between ephemeral
-        # runners — but never for a dry run, which by contract writes nothing to
-        # persist in the first place (see automation/pipeline.py's mode handling).
-        if: ${{ always() && steps.mode.outputs.mode != 'dry-run' }}
+        # Only after a live run that actually published something. Not dry-run (writes
+        # nothing, by contract). Not test (its writes live only in an in-memory copy of
+        # the database — see automation/pipeline.py's isolation branch — so there is
+        # nothing of its own for this step to find). Not a live run that ended in
+        # anything other than PUBLISHED either — DISABLED, NO_CANDIDATE, a rejection, a
+        # validation failure, or a genuine error (GEMINI_ERROR, PUBLISH_ERROR,
+        # CONFIG_ERROR) all leave state this workflow deliberately does not commit,
+        # rather than risk pushing something inconsistent from a run that did not
+        # finish the way it was supposed to. `steps.run.outputs.outcome` is written by
+        # the CLI itself (cli/auto.py's _emit_github_output) specifically so this
+        # condition never has to guess from the step's own success/failure alone —
+        # PUBLISHED is a successful exit code, but so are seven other outcomes.
+        if: ${{ steps.mode.outputs.mode == 'live' && steps.run.outputs.outcome == 'PUBLISHED' }}
         run: |
           set -euo pipefail
           DB_PATH="automation_state/ai_news.sqlite3"
@@ -163,4 +178,6 @@ jobs:
         if: always()
         run: |
           echo "Mode: ${{ steps.mode.outputs.mode }}"
-          echo "Pipeline step outcome: ${{ steps.run.outcome }}"
+          echo "Automation outcome: ${{ steps.run.outputs.outcome }}"
+          echo "Run automation step result: ${{ steps.run.outcome }}"
+          echo "State persisted: ${{ steps.mode.outputs.mode == 'live' && steps.run.outputs.outcome == 'PUBLISHED' }}"

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ai_news_editor.domain.clock import now_utc, to_iso
-from ai_news_editor.domain.errors import MigrationError
+from ai_news_editor.domain.errors import CheckpointError, MigrationError
 from ai_news_editor.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -78,6 +78,34 @@ def connect(database_path: Path, *, create_parents: bool = True) -> sqlite3.Conn
     connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA busy_timeout = 5000")
     return connection
+
+
+def checkpoint(connection: sqlite3.Connection) -> None:
+    """Force every committed change out of the WAL and into the main database file.
+
+    SQLite folds the ``-wal`` sidecar into the main file on its own — after enough
+    write traffic, and (usually) when the last connection to a database closes
+    normally. This application does not treat either as a guarantee: an abrupt process
+    exit (a CI job hitting its timeout, an out-of-memory kill) skips the close-time
+    fold entirely, and this project's automation workflow commits only the main
+    ``.sqlite3`` path to git, never ``-wal``/``-shm``. Calling this explicitly, right
+    before that file is read for a backup or a git commit, is what makes "the
+    committed file has everything" a fact instead of an assumption.
+
+    Raises:
+        CheckpointError: SQLite could not fold every frame — almost always because
+            another connection still holds a read transaction open against the WAL.
+            This application never has one, so seeing this means something unexpected
+            is sharing the connection.
+    """
+    busy, _log_frames, _checkpointed_frames = connection.execute(
+        "PRAGMA wal_checkpoint(TRUNCATE)"
+    ).fetchone()
+    if busy:
+        raise CheckpointError(
+            "WAL checkpoint could not complete — another connection is still reading "
+            "from the log, so some committed data may not yet be in the main file."
+        )
 
 
 @contextmanager

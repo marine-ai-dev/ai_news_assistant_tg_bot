@@ -217,34 +217,40 @@ class TestDoctorGuardsTheDeployment:
             assert forbidden not in text, forbidden
 
     def test_automation_off_is_not_a_failure(self, tmp_path: Path) -> None:
-        """The kill switch being off is the default, healthy state, not a warning."""
+        """The kill switch being off is the default, healthy state, not a warning —
+        it only gates live/scheduled publishing, so dry-run and test stay unaffected."""
         connection = db.connect(tmp_path / "ai_news.sqlite3")
         db.migrate(connection)
         connection.close()
 
-        checks = run_health_checks(self._settings(tmp_path, automation_enabled=False))
+        key = "AIzaSy" + "z" * 33
+        checks = run_health_checks(
+            self._settings(tmp_path, automation_enabled=False, gemini_api_key=key)
+        )
         assert all_ok(checks)
-        automation = next(c for c in checks if c.name == "Automation configured")
-        assert automation.ok
-        assert "AI_NEWS_AUTOMATION_ENABLED" in automation.detail
+        switch = next(c for c in checks if c.name == "Live automation enabled")
+        assert switch.ok
+        assert "AI_NEWS_AUTOMATION_ENABLED" in switch.detail
+        assert "dry-run and test remain available" in switch.detail
 
-    def test_automation_on_without_a_gemini_key_fails_the_health_check(
-        self, tmp_path: Path
-    ) -> None:
-        """Otherwise a scheduled run fails closed on every invocation, unnoticed."""
+    def test_no_gemini_key_is_not_a_failure_either(self, tmp_path: Path) -> None:
+        """'ai-news auto' is opt-in, same as Telegram above — a plain laptop doing
+        collection and human review only, with no Gemini key at all, is healthy, not
+        broken. The actual fail-closed guarantee lives in run_automation() itself,
+        which checks this unconditionally in every mode; doctor only reports."""
         connection = db.connect(tmp_path / "ai_news.sqlite3")
         db.migrate(connection)
         connection.close()
 
         checks = run_health_checks(
-            self._settings(tmp_path, automation_enabled=True, gemini_api_key=None)
+            self._settings(tmp_path, automation_enabled=False, gemini_api_key=None)
         )
+        assert all_ok(checks)
         gemini = next(c for c in checks if c.name == "Gemini configured")
-        assert not gemini.ok
-        assert "AI_NEWS_GEMINI_API_KEY" in gemini.detail
-        assert not all_ok(checks)
+        assert gemini.ok
+        assert "no key set" in gemini.detail
 
-    def test_automation_on_with_a_key_reports_the_model(self, tmp_path: Path) -> None:
+    def test_a_configured_key_reports_the_model(self, tmp_path: Path) -> None:
         connection = db.connect(tmp_path / "ai_news.sqlite3")
         db.migrate(connection)
         connection.close()
@@ -252,13 +258,28 @@ class TestDoctorGuardsTheDeployment:
         key = "AIzaSy" + "z" * 33
         checks = run_health_checks(
             self._settings(
-                tmp_path, automation_enabled=True, gemini_api_key=key,
+                tmp_path, automation_enabled=False, gemini_api_key=key,
                 llm_model="gemini-test-model",
             )
         )
         gemini = next(c for c in checks if c.name == "Gemini configured")
         assert gemini.ok
         assert "gemini-test-model" in gemini.detail
+
+    def test_live_automation_enabled_is_reported_when_the_switch_is_on(
+        self, tmp_path: Path
+    ) -> None:
+        connection = db.connect(tmp_path / "ai_news.sqlite3")
+        db.migrate(connection)
+        connection.close()
+
+        key = "AIzaSy" + "z" * 33
+        checks = run_health_checks(
+            self._settings(tmp_path, automation_enabled=True, gemini_api_key=key)
+        )
+        switch = next(c for c in checks if c.name == "Live automation enabled")
+        assert switch.ok
+        assert "may publish" in switch.detail
 
 
 class TestDeploymentArtefacts:

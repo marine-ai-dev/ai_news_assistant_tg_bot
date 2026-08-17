@@ -27,6 +27,16 @@ class MigrationError(FatalError):
     """The database schema could not be brought to the expected state."""
 
 
+class CheckpointError(FatalError):
+    """A WAL checkpoint could not fully fold the log into the main database file.
+
+    Raised rather than silently ignored because this application's git-backed state
+    persistence (see the GitHub Actions automation workflow) commits only the main
+    ``.sqlite3`` file, never its ``-wal``/``-shm`` sidecars — a checkpoint that leaves
+    committed rows stranded in the WAL would make them vanish from what gets persisted.
+    """
+
+
 class RepositoryError(AiNewsError):
     """A persistence operation failed or violated an invariant."""
 

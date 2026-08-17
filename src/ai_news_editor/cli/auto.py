@@ -9,12 +9,21 @@ GitHub Actions run is one call to ``auto once`` and then the process exits, same
 Three modes, one function underneath (``automation.pipeline.run_automation``):
 
 * ``--dry-run`` never contacts Telegram and never approves anything. It proves the
-  same prompts and the same validation a real run would use.
-* ``--test`` runs the whole pipeline, including approval, but sends to
-  ``AI_NEWS_TEST_CHANNEL`` rather than the production channel.
-* the default (neither flag) is a live run against the production channel, still
-  gated by ``AI_NEWS_AUTOMATION_ENABLED`` — a plain ``ai-news auto once`` with the kill
-  switch off does nothing and says so, rather than needing a separate flag to stay safe.
+  same prompts and the same validation a real run would use, and runs regardless of
+  ``AI_NEWS_AUTOMATION_ENABLED`` — a manual dry run must keep working while that switch
+  stays off, which is the normal state once a scheduled workflow exists.
+* ``--test`` runs the whole pipeline, including approval, and sends to
+  ``AI_NEWS_TEST_CHANNEL`` rather than the production channel — also regardless of
+  ``AI_NEWS_AUTOMATION_ENABLED``, for the same reason. Its writes (the Evaluation, the
+  Draft, the approval, the Publication row) land in a throwaway in-memory copy of the
+  database, never the real one, so a test send can never make a candidate unavailable
+  to a later live run or count against the live daily limit — see
+  ``automation.pipeline.run_automation``'s docstring. Only the Telegram message itself
+  is real.
+* the default (neither flag) is a live run against the production channel, and this is
+  the ONE mode ``AI_NEWS_AUTOMATION_ENABLED`` gates — a plain ``ai-news auto once`` (or
+  a scheduled run, which is always this mode) with the kill switch off does nothing and
+  says so, rather than needing a separate flag to stay safe.
 
 Nothing here can approve a PROMPT or a TESTED_USE_CASE, because nothing here looks for
 one — nothing in this module content-type-filters at all; the automation pipeline itself
@@ -23,6 +32,7 @@ only ever selects from NEWS candidates.
 
 from __future__ import annotations
 
+import os
 from typing import Annotated
 
 import typer
@@ -35,6 +45,7 @@ from ai_news_editor.domain.enums import PublicationStatus
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.settings import Settings, get_settings
+from ai_news_editor.storage import db
 
 console = Console()
 err_console = Console(stderr=True)
@@ -85,7 +96,29 @@ def _run_once(*, mode: str) -> AutomationResult:
 
         return run_automation(connection, settings, mode=mode)  # type: ignore[arg-type]
     finally:
+        # Fold the WAL into the main file before closing, rather than trusting SQLite's
+        # own close-time checkpoint. The GitHub Actions workflow commits only the main
+        # .sqlite3 path to git — see storage.db.checkpoint's docstring — and this is
+        # the one place every 'auto once' invocation is guaranteed to pass through,
+        # regardless of mode or outcome.
+        db.checkpoint(connection)
         connection.close()
+
+
+def _emit_github_output(result: AutomationResult) -> None:
+    """Expose this run's outcome to a GitHub Actions step, when running as one.
+
+    A no-op everywhere else: ``GITHUB_OUTPUT`` is a path GitHub Actions sets in the
+    runner's environment for exactly this purpose, and is simply absent locally or in
+    tests. Written as ``outcome=<value>`` so a later workflow step can gate on it (e.g.
+    "only commit persisted state after a live run that actually published something")
+    without parsing this command's Rich-formatted console output.
+    """
+    path = os.environ.get("GITHUB_OUTPUT")
+    if not path:
+        return
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write(f"outcome={result.outcome.value}\n")
 
 
 _OUTCOME_STYLE = {
@@ -149,6 +182,7 @@ def auto_once(
     mode = "dry-run" if dry_run else ("test" if test else "live")
     result = _run_once(mode=mode)
     _report(result)
+    _emit_github_output(result)
     if not result.is_quiet:
         raise typer.Exit(code=1)
 
@@ -163,6 +197,7 @@ def auto_run() -> None:
     """
     result = _run_once(mode="live")
     _report(result)
+    _emit_github_output(result)
     if not result.is_quiet:
         raise typer.Exit(code=1)
 

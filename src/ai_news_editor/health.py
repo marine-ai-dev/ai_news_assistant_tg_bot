@@ -139,30 +139,32 @@ def _automation_checks(settings: Settings) -> list[HealthCheck]:
     """Whether the unattended NEWS pipeline (``ai-news auto``) could actually run.
 
     Local and lightweight, like every other check here: it reads settings, never calls
-    Gemini. A missing key is normal when the kill switch is off — most environments
-    (a laptop, a review-only deployment) never need one — so that case is reported, not
-    failed. What *is* a failure is the kill switch being on with no key: a scheduled
-    GitHub Actions run would fail closed on every single invocation, silently, until
-    someone reads its logs.
+    Gemini. Both checks are informational either way, same as the Telegram checks
+    above and for the same reason: a laptop doing collection and human review only,
+    with no Gemini key and the kill switch off, is a normal, healthy state, not a
+    warning — ``ai-news auto`` is opt-in, and this command must not start insisting on
+    configuration a reader who never touches it does not need. The actual fail-closed
+    guarantee for a missing key lives in ``automation.pipeline.run_automation`` itself
+    (checked in every mode, including ``--dry-run``), which is what makes it safe for
+    doctor to only report here rather than enforce.
     """
-    if not settings.automation_enabled:
-        return [
-            HealthCheck(
-                "Automation configured",
-                True,
-                "AI_NEWS_AUTOMATION_ENABLED is not set - the unattended NEWS pipeline "
-                "will not run",
-            )
-        ]
-
     has_key = settings.gemini_api_key is not None
     return [
         HealthCheck(
             "Gemini configured",
-            has_key,
+            True,
             f"model={settings.llm_model}"
             if has_key
-            else "AI_NEWS_GEMINI_API_KEY is empty - 'ai-news auto' will fail closed",
+            else "no key set - 'ai-news auto' will fail closed in every mode, "
+            "including --dry-run, if it is ever run",
+        ),
+        HealthCheck(
+            "Live automation enabled",
+            True,
+            "AI_NEWS_AUTOMATION_ENABLED is set - scheduled and live runs may publish"
+            if settings.automation_enabled
+            else "AI_NEWS_AUTOMATION_ENABLED is not set - scheduled and live runs are "
+            "a safe no-op; dry-run and test remain available",
         ),
     ]
 
