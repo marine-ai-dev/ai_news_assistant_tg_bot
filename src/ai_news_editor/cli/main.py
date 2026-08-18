@@ -21,6 +21,7 @@ from ai_news_editor.cli.calendar import calendar_app
 from ai_news_editor.cli.content import app as content_app
 from ai_news_editor.cli.draft import app as draft_app
 from ai_news_editor.cli.editorial import app as editorial_app
+from ai_news_editor.cli.media import app as media_app
 from ai_news_editor.cli.publish import publication_app, publish, telegram_app
 from ai_news_editor.cli.queue import queue_app, scheduler_app
 from ai_news_editor.cli.review import app as review_app
@@ -60,6 +61,7 @@ app.add_typer(queue_app)
 app.add_typer(scheduler_app)
 app.add_typer(telegram_app)
 app.add_typer(sources_app)
+app.add_typer(media_app)
 # A plain command, not a group: "publish" takes one draft id and nothing else, and a
 # Typer group would treat that id as a subcommand name.
 app.command("publish")(publish)
