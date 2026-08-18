@@ -566,28 +566,39 @@ written) rather than publishing something uncertain. Genuine infrastructure fail
 (a malformed API response, an exhausted retry budget) exit non-zero instead, so a
 scheduled workflow only turns red for something actually worth looking at.
 
-**Three modes, one code path:**
+**Three modes, one code path (`run_pass`, in `automation/pipeline.py`):**
 
-| Mode | Selects & writes | Approves & persists | Sends to | Needs the kill switch? |
+| Mode | Collects & selects | Approves & persists | Sends to | Needs the kill switch? |
 |---|---|---|---|---|
-| `--dry-run` | ✅ | ❌ nothing is written, anywhere | nowhere | ❌ no |
-| `--test` | ✅ | ✅, but only in a throwaway in-memory copy of the database — see below | `AI_NEWS_TEST_CHANNEL` | ❌ no |
-| *(default)* `live` | ✅ | ✅, for real | `AI_NEWS_TELEGRAM_CHANNEL` | ✅ yes |
+| `--dry-run` | ✅, for real | ❌ — see below | nowhere | ❌ no |
+| `--test` | ✅, for real | ✅, but only in an ephemeral copy of the database — see below | `AI_NEWS_TEST_CHANNEL` | ❌ no |
+| *(default)* `live` | ✅, for real | ✅, for real | `AI_NEWS_TELEGRAM_CHANNEL` | ✅ yes |
 
 ```bash
-ai-news auto once --dry-run   # proves the prompts and validation; touches nothing
+ai-news auto once --dry-run   # proves the whole real pipeline; touches nothing canonical
 ai-news auto once --test      # the real pipeline, sent to a private test channel
 ai-news auto once             # production — still refuses to run unless enabled below
 ai-news auto stats            # how much gemini:auto activity is on record
 ```
 
-**Test-channel isolation.** `--test` runs the real pipeline — real selection, real
-generation, real validation, a real approval, a real Telegram send — but its writes
-(the Evaluation, the Draft, the approval, the Publication row) land in an in-memory copy
-of the database made at the start of that one run, never the real one. A manual test
-send can never make an article unavailable to a later live run, count against the live
-daily limit, or leave a Publication record a human reading production history would
-mistake for a real one. Only the Telegram message itself is real, which is the point.
+**Database isolation, not a shortcut.** `--dry-run` and `--test` both run the *entire*
+real pipeline — collection against the real RSS/Atom sources, normalization,
+deduplication, Gemini selection, the full-text fetch, Gemini generation, validation,
+and for `--test`, a real approval and a real Telegram send. What makes them safe is not
+skipping any of that (an earlier version of `--dry-run` did skip collection's writes,
+which meant a fresh checkout's first dry run could never reach Gemini at all — fixed by
+making the writes real and isolating *where they land* instead). Before touching
+storage, `run_pass` makes a page-for-page in-memory copy of the canonical database
+(`automation.pipeline.isolated_connection`, SQLite's own backup API) seeded with real
+history — real previously-collected articles, real dedup fingerprints, real prior
+publications — so a fresh GitHub Actions runner still dedupes correctly against
+everything the canonical database already knows. Every write from collection through
+publication lands only in that copy, discarded the moment the run ends. `live` is the
+only mode that skips this: it reads and writes the canonical database directly, same as
+always. A `--test` send can therefore never make an article unavailable to a later live
+run, count against the live daily limit, or leave a Publication record a human reading
+production history would mistake for a real one — only the Telegram message itself is
+real, which is the point.
 
 **Off unless you turn it on, explicitly — and only `live` (and the schedule, which is
 always `live`) checks it at all:**

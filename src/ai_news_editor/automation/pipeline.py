@@ -1,7 +1,9 @@
 """One unattended run, start to finish: the order in section 15 exists to be read here.
 
-``run_automation`` is the whole story. Every step before "approve" only *reads*; nothing
-is written to storage until a Gemini-written post has passed the same
+``run_pass`` is the whole story, collection included: it decides which database this
+run actually writes to (:func:`isolated_connection`), then collects, normalizes and
+hands off to ``run_automation`` for selection onward. Every step before "approve" only
+*reads*; nothing is written to storage until a Gemini-written post has passed the same
 :class:`~writing.schema.DraftResult` validation a human-written one passes, and nothing
 is approved until that Draft exists through the same
 :func:`~writing.import_results.import_drafts` a human-imported batch goes through.
@@ -22,6 +24,8 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -61,12 +65,16 @@ from ai_news_editor.editorial.rubric import (
     SCHEMA_VERSION as EDITORIAL_SCHEMA_VERSION,
 )
 from ai_news_editor.observability.logging import get_logger
+from ai_news_editor.pipeline.collect import collect as collect_sources
+from ai_news_editor.pipeline.process import process as run_processing
 from ai_news_editor.publishing.gate import approve_draft
 from ai_news_editor.publishing.service import prepare_publication, publish_bundle
 from ai_news_editor.publishing.telegram import TelegramClient
 from ai_news_editor.scheduling.clock import CHANNEL_TIMEZONE, to_local
 from ai_news_editor.settings import Settings
+from ai_news_editor.sources.config import load_sources_config
 from ai_news_editor.sources.fulltext import fetch_fulltext
+from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.storage.repositories import (
     ArticleRepository,
     DraftRepository,
@@ -179,6 +187,75 @@ class AutomationResult:
         return self.outcome in QUIET_OUTCOMES
 
 
+@contextmanager
+def isolated_connection(
+    canonical_connection: sqlite3.Connection, *, mode: Mode
+) -> Iterator[sqlite3.Connection]:
+    """The one place this project decides which database a run actually writes to.
+
+    ``"live"`` yields the canonical connection it was given, unchanged — every write
+    from collection through publication lands in the real, on-disk database, same as
+    always. ``"dry-run"`` and ``"test"`` both yield a fresh, in-memory copy instead
+    (SQLite's own backup API, page-for-page): every read sees genuine history — real
+    collected articles, real dedup fingerprints, real prior publications — so a fresh
+    GitHub Actions runner with an empty local checkout still evaluates candidates
+    against the *canonical* database's history, not a blank slate; every write lands
+    only in that copy and is gone the moment this context manager exits. The canonical
+    connection passed in is never written to and never closed here.
+
+    This has to wrap collection and normalization, not just the automation pipeline
+    that follows them — a caller that calls this once, up front, and then threads the
+    yielded connection through ``collect()``, ``process()`` and
+    ``run_automation()`` in turn (see :func:`run_pass`) is what makes a dry run see
+    real, freshly-collected candidates instead of an empty database, and what stops a
+    ``--test`` run's collection step from writing new articles into the canonical
+    database the way it used to.
+    """
+    if mode == "live":
+        yield canonical_connection
+        return
+
+    ephemeral = sqlite3.connect(":memory:", isolation_level=None)
+    ephemeral.row_factory = sqlite3.Row
+    ephemeral.execute("PRAGMA foreign_keys = ON")
+    canonical_connection.backup(ephemeral)
+    try:
+        yield ephemeral
+    finally:
+        ephemeral.close()
+
+
+def run_pass(
+    canonical_connection: sqlite3.Connection,
+    settings: Settings,
+    *,
+    mode: Mode,
+    now: datetime | None = None,
+    run_id: str | None = None,
+) -> AutomationResult:
+    """Collect, normalize, then run the automation pipeline — as one unit, against
+    whichever database :func:`isolated_connection` selects for ``mode``.
+
+    This is the entire unattended pass, and the only place collection is wired
+    together with selection/generation/publication for this pipeline — ``ai-news auto
+    once`` (cli/auto.py) is a thin wrapper around this one function; nothing else
+    duplicates this sequence. Collection and normalization always run for real (never
+    ``collect()``'s own ``dry_run=True`` no-write mode) — what makes ``"dry-run"``
+    dry is *which* database those real writes land in, not whether they happen.
+    """
+    run_id = run_id or uuid.uuid4().hex[:12]
+    with isolated_connection(canonical_connection, mode=mode) as connection:
+        try:
+            config = load_sources_config(settings.sources_config_path)
+            with HttpClient() as http:
+                collect_sources(connection, http, config, run_id=run_id)
+            run_processing(connection)
+        except AiNewsError as exc:
+            return AutomationResult(Outcome.CONFIG_ERROR, f"could not collect sources: {exc}")
+
+        return run_automation(connection, settings, mode=mode, now=now, run_id=run_id)
+
+
 def run_automation(
     connection: sqlite3.Connection,
     settings: Settings,
@@ -187,9 +264,16 @@ def run_automation(
     now: datetime | None = None,
     run_id: str | None = None,
 ) -> AutomationResult:
-    """Run the whole pipeline once. Publishes at most one post, or none.
+    """Select, generate, validate and (unless ``"dry-run"``) publish at most one post.
 
-    ``mode`` controls three things:
+    ``connection`` is used exactly as given — this function has no opinion about
+    whether it is the canonical database or an isolated copy; that decision was
+    already made by whoever called it (:func:`run_pass`, via
+    :func:`isolated_connection`). Called directly like this, it is most useful for
+    testing selection, generation and validation against a seeded database without
+    also mocking collection.
+
+    ``mode`` controls two things here:
 
     * whether Telegram is contacted at all (never, for ``"dry-run"``), and which
       channel receives the send when it is (``settings.test_channel`` for ``"test"``,
@@ -200,13 +284,6 @@ def run_automation(
       steady state this project expects once a scheduled job exists, and nobody should
       have to temporarily arm the setting that makes the *cron* start publishing just
       to prove a prompt still works.
-    * which database this run actually writes to. ``"live"`` writes to the connection
-      it was given, same as always. ``"test"`` writes to a throwaway, in-memory copy of
-      it instead (step 2b) — a manual test send must never make a candidate unavailable
-      to a later live run, count against the live daily limit, or leave a Publication
-      record a human reviewing production history would mistake for a real one. Only
-      Telegram sees a real side effect in this mode: the message actually lands in the
-      test channel, which is the entire point of running it.
 
     Selection, generation and validation run identically in all three modes — a dry
     run proves the same prompts and the same checks a live run would use, not an
@@ -235,30 +312,10 @@ def run_automation(
         missing = "AI_NEWS_TEST_CHANNEL" if mode == "test" else "AI_NEWS_TELEGRAM_CHANNEL"
         return AutomationResult(Outcome.CONFIG_ERROR, f"{missing} is not set.")
 
-    # 2b. Test-mode isolation. Everything from here on reads and writes through
-    # `connection` — for "test", that name is rebound to a fresh, in-memory copy of the
-    # real database (SQLite's own backup API, page-for-page), so every read below still
-    # sees genuine production dedup state (an article a live run already drafted stays
-    # excluded), but every write from here on — the Evaluation, the Draft, the
-    # approval, the Publication row — lands only in that copy and is discarded when
-    # this function returns. The caller's own connection is never written to, and never
-    # closed, in this mode.
-    ephemeral: sqlite3.Connection | None = None
-    if mode == "test":
-        ephemeral = sqlite3.connect(":memory:", isolation_level=None)
-        ephemeral.row_factory = sqlite3.Row
-        ephemeral.execute("PRAGMA foreign_keys = ON")
-        connection.backup(ephemeral)
-        connection = ephemeral
-
-    try:
-        return _run_pipeline(
-            connection, settings, mode=mode, moment=moment, run_id=run_id,
-            target_channel=target_channel,
-        )
-    finally:
-        if ephemeral is not None:
-            ephemeral.close()
+    return _run_pipeline(
+        connection, settings, mode=mode, moment=moment, run_id=run_id,
+        target_channel=target_channel,
+    )
 
 
 def _run_pipeline(

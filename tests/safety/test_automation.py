@@ -30,7 +30,12 @@ import pytest
 
 from ai_news_editor.automation import pipeline as automation_pipeline
 from ai_news_editor.automation.gemini import GeminiClient
-from ai_news_editor.automation.pipeline import Outcome, run_automation
+from ai_news_editor.automation.pipeline import (
+    Outcome,
+    isolated_connection,
+    run_automation,
+    run_pass,
+)
 from ai_news_editor.domain.enums import (
     ArticleStatus,
     DraftStatus,
@@ -155,6 +160,86 @@ def fake_fulltext_transport(
     return httpx.MockTransport(handler)
 
 
+#: A single, complete RSS item — title, link, guid, author, pubDate, description and a
+#: full body via content:encoded — modeled on tests/fixtures/feeds/rss_full.xml's first
+#: entry, which is already known to normalize cleanly. Used by TestFullPassEndToEnd to
+#: prove collection really runs (and really produces a candidate) inside run_pass,
+#: rather than seeding an Article directly the way every other test in this file does.
+_FEED_ARTICLE_URL = "https://example.invalid/posts/new-feature"
+_FEED_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Test Official Feed</title>
+    <link>https://example.invalid/</link>
+    <description>Synthetic feed for run_pass end-to-end tests.</description>
+    <item>
+      <title>New feature announced</title>
+      <link>{_FEED_ARTICLE_URL}</link>
+      <guid isPermaLink="false">test-guid-0001</guid>
+      <author>editor@example.invalid (A. Editor)</author>
+      <pubDate>Mon, 03 Aug 2026 10:30:00 +0000</pubDate>
+      <description>A summary of a new feature announced today.</description>
+      <content:encoded><![CDATA[<p>A new feature was announced today, letting users
+      summarize documents directly inside the chat interface.</p>]]></content:encoded>
+    </item>
+  </channel>
+</rss>"""
+
+
+def sources_yaml(tmp_path: Path, *, feed_url: str = "https://example.invalid/rss.xml") -> Path:
+    """A one-source, OFFICIAL-tier sources.yaml — the real file run_pass's internal
+    load_sources_config() reads, not a bypass of it."""
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        f"""\
+version: 1
+defaults:
+  timeout_seconds: 20
+  max_items_per_fetch: 50
+sources:
+  - id: test_official
+    name: Test Official Source
+    adapter: rss
+    url: {feed_url}
+    trust_tier: OFFICIAL
+    editorial_role: Primary official source for end-to-end tests.
+""",
+        encoding="utf-8",
+    )
+    return path
+
+
+def collection_transport(
+    *,
+    feed_url: str = "https://example.invalid/rss.xml",
+    feed_body: bytes = _FEED_XML.encode(),
+    article_url: str = _FEED_ARTICLE_URL,
+    article_html: str | None = None,
+) -> httpx.MockTransport:
+    """Answers both HttpClient uses inside run_pass: the RSS fetch (collection) and
+    the article-page fetch (fulltext) — the same HttpClient class serves both, so one
+    routing transport, keyed by exact URL, covers what patch_clients' single
+    fulltext_transport parameter injects everywhere HttpClient() is constructed.
+    """
+    body = article_html or (
+        "<html><body><article><p>" + (REAL_ARTICLE_TEXT * 3) + "</p></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == feed_url:
+            return httpx.Response(
+                200, content=feed_body, headers={"content-type": "application/rss+xml"}
+            )
+        if url == article_url:
+            return httpx.Response(
+                200, content=body.encode(), headers={"content-type": "text/html"}
+            )
+        raise AssertionError(f"unexpected HTTP request in a run_pass test: {url!r}")
+
+    return httpx.MockTransport(handler)
+
+
 def fake_telegram_transport() -> httpx.MockTransport:
     sent: list[dict[str, Any]] = []
 
@@ -266,8 +351,18 @@ def db(tmp_path: Path) -> sqlite3.Connection:
 
 
 def snapshot(connection: sqlite3.Connection) -> dict[str, Any]:
-    """Every row this pipeline is capable of writing, for a before/after comparison."""
+    """Every row this pipeline is capable of writing, for a before/after comparison.
+
+    Includes sources/raw_items/articles alongside the automation-pipeline tables: now
+    that collection and normalization run for real in every mode (see run_pass), a
+    dry-run or test snapshot has to prove those tables are untouched too, not just the
+    evaluation/draft/publication ones — that is exactly the property the isolation
+    fix exists to guarantee.
+    """
     return {
+        "sources": connection.execute("SELECT id FROM sources").fetchall(),
+        "raw_items": connection.execute("SELECT id FROM raw_items").fetchall(),
+        "articles": connection.execute("SELECT id FROM articles").fetchall(),
         "drafts": connection.execute("SELECT id FROM drafts").fetchall(),
         "draft_versions": connection.execute("SELECT id FROM draft_versions").fetchall(),
         "evaluations": connection.execute("SELECT id FROM evaluations").fetchall(),
@@ -917,12 +1012,20 @@ class TestSuccessfulPublication:
 
 
 class TestTestModeIsolation:
-    """``--test`` runs the real pipeline against a throwaway, in-memory copy of the
-    database (see run_automation's isolation branch) — every one of these proves a
-    real Telegram send to the test channel leaves the real, on-disk database exactly
-    as it was, so a manual test dispatch can never make an article unavailable to a
-    later live run, count against the live daily limit, or leave a Publication record
-    a human reading production history would mistake for a real one.
+    """Isolation now happens one level up from run_automation() itself —
+    ``automation.pipeline.isolated_connection`` (wrapped, for a real run, by
+    ``run_pass``) is what decides which database a mode actually writes to. Calling
+    ``run_automation()`` directly, as these do, means passing it whatever
+    ``isolated_connection`` yields — exactly what ``run_pass`` does — rather than
+    relying on ``run_automation`` to isolate on its own, which it no longer does (see
+    its docstring for why: a caller has to isolate collection too, which happens
+    before ``run_automation`` is ever called).
+
+    Every test here proves a real Telegram send to the test channel leaves the real,
+    on-disk database exactly as it was, so a manual test dispatch can never make an
+    article unavailable to a later live run, count against the live daily limit, or
+    leave a Publication record a human reading production history would mistake for a
+    real one.
     """
 
     def test_test_mode_writes_nothing_to_the_real_database(
@@ -941,7 +1044,8 @@ class TestTestModeIsolation:
         )
         before = snapshot(connection)
 
-        result = run_automation(connection, settings, mode="test")
+        with isolated_connection(connection, mode="test") as effective:
+            result = run_automation(effective, settings, mode="test")
 
         # The pipeline ran for real — a real Evaluation, Draft, approval and
         # Publication were created and a real Telegram send happened — none of it
@@ -966,7 +1070,8 @@ class TestTestModeIsolation:
             ),
             telegram_transport=fake_telegram_transport(),
         )
-        result = run_automation(connection, settings, mode="test")
+        with isolated_connection(connection, mode="test") as effective:
+            result = run_automation(effective, settings, mode="test")
         assert result.outcome is Outcome.PUBLISHED
         assert PublicationRepository(connection).count() == 0
         assert EvaluationRepository(connection).count() == 0
@@ -991,7 +1096,8 @@ class TestTestModeIsolation:
             ),
             telegram_transport=fake_telegram_transport(),
         )
-        test_result = run_automation(connection, settings, mode="test")
+        with isolated_connection(connection, mode="test") as effective:
+            test_result = run_automation(effective, settings, mode="test")
         assert test_result.outcome is Outcome.PUBLISHED
         assert test_result.channel == settings.test_channel
 
@@ -1026,7 +1132,8 @@ class TestTestModeIsolation:
             ),
             telegram_transport=fake_telegram_transport(),
         )
-        test_result = run_automation(connection, settings, mode="test")
+        with isolated_connection(connection, mode="test") as effective:
+            test_result = run_automation(effective, settings, mode="test")
         assert test_result.outcome is Outcome.PUBLISHED
 
         patch_clients(
@@ -1041,11 +1148,11 @@ class TestTestModeIsolation:
             "the daily limit of 1 must still have its full budget after a test send"
         )
 
-    def test_the_callers_connection_object_is_never_closed_by_test_mode(
+    def test_the_callers_connection_object_is_never_closed_by_isolation(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The real connection must remain open and usable after a --test run — only
-        run_automation's own throwaway in-memory copy is ever closed."""
+        isolated_connection's own throwaway in-memory copy is ever closed."""
         connection = db(tmp_path)
         article = seed_official_article(connection)
         settings = build_settings(tmp_path)
@@ -1057,6 +1164,269 @@ class TestTestModeIsolation:
             ),
             telegram_transport=fake_telegram_transport(),
         )
-        run_automation(connection, settings, mode="test")
+        with isolated_connection(connection, mode="test") as effective:
+            run_automation(effective, settings, mode="test")
         # Would raise sqlite3.ProgrammingError on a closed connection.
         assert connection.execute("SELECT 1").fetchone()[0] == 1
+
+    def test_isolated_connection_is_a_genuine_copy_not_the_same_object(
+        self, tmp_path: Path
+    ) -> None:
+        connection = db(tmp_path)
+        with isolated_connection(connection, mode="test") as effective:
+            assert effective is not connection
+
+        with isolated_connection(connection, mode="dry-run") as effective:
+            assert effective is not connection
+
+    def test_live_mode_is_not_isolated_at_all(self, tmp_path: Path) -> None:
+        """live is the one mode where isolated_connection must be a complete no-op —
+        yielding the exact same object it was given, not even a copy of it."""
+        connection = db(tmp_path)
+        with isolated_connection(connection, mode="live") as effective:
+            assert effective is connection
+
+    def test_isolated_connection_sees_historical_state_from_the_canonical_database(
+        self, tmp_path: Path
+    ) -> None:
+        """A fresh GitHub Actions runner still has to dedup against real history —
+        the ephemeral copy is seeded from whatever the canonical database already
+        holds, not started blank."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        with isolated_connection(connection, mode="dry-run") as effective:
+            row = effective.execute(
+                "SELECT id FROM articles WHERE id = ?", (str(article.id),)
+            ).fetchone()
+        assert row is not None
+        assert row["id"] == str(article.id)
+
+
+class TestFullPassEndToEnd:
+    """``run_pass()`` is the real production entry point — ``cli/auto.py``'s
+    ``_run_once`` is now a thin wrapper around it. Every test here exercises real
+    (mocked) collection, not a pre-seeded article, because that is exactly what a real
+    GitHub Actions dry-run exposed: collection used to run with ``dry_run=True``
+    (writing nothing at all), so a fresh runner's first dry-run never had a candidate
+    to offer Gemini, and ``NO_CANDIDATE`` proved nothing about whether selection,
+    fulltext, generation or validation actually worked. Collection and normalization
+    now always write for real — only *where* they write depends on mode.
+    """
+
+    def test_a_fresh_dry_run_reaches_selection_fulltext_generation_and_validation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The main regression test for the bug the real GitHub Actions dry-run
+        found."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=fake_telegram_transport(),
+            fulltext_transport=collection_transport(),
+        )
+        before = snapshot(connection)
+
+        result = run_pass(connection, settings, mode="dry-run")
+
+        assert result.outcome is Outcome.DRY_RUN_COMPLETE, result.detail
+        assert result.candidates_considered >= 1, (
+            "collection produced no candidate at all — this is exactly the bug: a "
+            "dry-run that never reaches Gemini because it refused to see its own feed"
+        )
+        assert snapshot(connection) == before, (
+            "the canonical database must be untouched even though collection, "
+            "normalization, selection, fulltext, generation and validation all ran "
+            "for real, against the isolated in-memory copy"
+        )
+
+    def test_dry_run_never_calls_telegram_even_with_real_collection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        telegram = fake_telegram_transport()
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=telegram,
+            fulltext_transport=collection_transport(),
+        )
+        result = run_pass(connection, settings, mode="dry-run")
+        assert result.outcome is Outcome.DRY_RUN_COMPLETE, result.detail
+        assert telegram.sent == []  # type: ignore[attr-defined]
+
+    def test_dry_run_sees_historical_dedup_state_from_the_canonical_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The feed offers the exact item (same source, same guid) a prior real run
+        already collected and evaluated — the ephemeral copy has to see that history
+        via collect()'s own (source_id, external_id) dedup, or a fresh runner would
+        re-offer already-handled stories forever."""
+        connection = db(tmp_path)
+        sources = SourceRepository(connection)
+        raw_items = RawItemRepository(connection)
+        articles = ArticleRepository(connection)
+
+        source = sources.upsert(make_source("test_official", trust_tier=TrustTier.OFFICIAL))
+        item = raw_items.add(make_raw_item(source.id, external_id="test-guid-0001"))
+        already_evaluated = articles.add(
+            make_article(
+                item.id, source.id, canonical_url=_FEED_ARTICLE_URL,
+                clean_text="A new feature was announced today.",
+            )
+        )
+        from ai_news_editor.domain.enums import (
+            AudienceTier,
+            Category,
+            EditorialDecision,
+            VerificationStatus,
+        )
+        from ai_news_editor.domain.models import Evaluation
+
+        EvaluationRepository(connection).add(
+            Evaluation(
+                article_id=already_evaluated.id, schema_version="1", rubric_version="1",
+                evaluator_type=EvaluatorType.AUTOMATED, evaluator="gemini:auto",
+                content_fingerprint="x", decision=EditorialDecision.SHORTLIST,
+                category=Category.PRODUCT_UPDATE, audience=AudienceTier.NEWCOMER,
+                scores=dict(automation_pipeline._AUTOMATION_SCORES), composite_score=0.0,
+                verification_status=VerificationStatus.NOT_REQUIRED,
+            )
+        )
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        patch_clients(
+            monkeypatch,
+            gemini_transport=None,
+            telegram_transport=None,
+            fulltext_transport=collection_transport(),
+        )
+
+        result = run_pass(connection, settings, mode="dry-run")
+
+        assert result.outcome is Outcome.NO_CANDIDATE, (
+            f"expected the already-evaluated article to be excluded via canonical "
+            f"history visible in the isolated copy; got {result.outcome} instead "
+            f"({result.detail})"
+        )
+
+    def test_test_mode_collects_a_new_article_and_offers_it_to_gemini_in_the_same_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        telegram = fake_telegram_transport()
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=telegram,
+            fulltext_transport=collection_transport(),
+        )
+        before = snapshot(connection)
+
+        result = run_pass(connection, settings, mode="test")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert result.channel == settings.test_channel
+        assert len([c for c in telegram.sent if "text" in c]) == 1  # type: ignore[attr-defined]
+        assert snapshot(connection) == before, (
+            "test mode's own collection pass must never reach the canonical database"
+        )
+
+    def test_test_then_live_on_the_same_canonical_state(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The scenario the isolation fix exists to make possible: a --test dispatch
+        to eyeball the real Telegram output, then a live run moments later that
+        genuinely collects, selects and publishes the same story for production."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=fake_telegram_transport(),
+            fulltext_transport=collection_transport(),
+        )
+        test_result = run_pass(connection, settings, mode="test")
+        assert test_result.outcome is Outcome.PUBLISHED, test_result.detail
+        assert test_result.channel == settings.test_channel
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=fake_telegram_transport(),
+            fulltext_transport=collection_transport(),
+        )
+        live_result = run_pass(connection, settings, mode="live")
+        assert live_result.outcome is Outcome.PUBLISHED, live_result.detail
+        assert live_result.channel == settings.telegram_channel
+        assert PublicationRepository(connection).count() == 1
+
+    def test_live_mode_writes_collection_state_to_the_canonical_database(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Existing behaviour, unchanged: live collection and publication both land
+        in the real database — this is what the GitHub Actions workflow commits."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": _FEED_ARTICLE_URL},
+            ),
+            telegram_transport=fake_telegram_transport(),
+            fulltext_transport=collection_transport(),
+        )
+
+        result = run_pass(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert SourceRepository(connection).count() == 1
+        assert RawItemRepository(connection).count() == 1
+        assert connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0] == 1
+        assert PublicationRepository(connection).count() == 1
+
+    def test_a_genuinely_empty_feed_is_still_a_quiet_no_candidate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The other side of the fix: if collection and normalization run for real
+        and genuinely find nothing OFFICIAL and NORMALIZED, NO_CANDIDATE is still the
+        correct, honest outcome — not every dry-run has to reach Gemini, only ones
+        collection actually gave a real candidate to work with."""
+        connection = db(tmp_path)
+        empty_feed = (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            "<rss version=\"2.0\"><channel><title>Empty</title>"
+            "<link>https://example.invalid/</link>"
+            "<description>No items.</description></channel></rss>"
+        )
+        settings = build_settings(tmp_path, sources_config_path=sources_yaml(tmp_path))
+        patch_clients(
+            monkeypatch,
+            gemini_transport=None,
+            telegram_transport=None,
+            fulltext_transport=collection_transport(feed_body=empty_feed.encode()),
+        )
+
+        result = run_pass(connection, settings, mode="dry-run")
+
+        assert result.outcome is Outcome.NO_CANDIDATE
+        assert result.is_quiet

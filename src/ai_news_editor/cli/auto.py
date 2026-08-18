@@ -6,24 +6,31 @@ to do. There is no long-running process here and nothing to keep alive; a schedu
 GitHub Actions run is one call to ``auto once`` and then the process exits, same as
 ``ai-news collect`` or ``ai-news publish`` always have.
 
-Three modes, one function underneath (``automation.pipeline.run_automation``):
+Three modes, one function underneath (``automation.pipeline.run_pass``, which collects
+and normalizes before handing off to ``run_automation`` for selection onward):
 
-* ``--dry-run`` never contacts Telegram and never approves anything. It proves the
-  same prompts and the same validation a real run would use, and runs regardless of
-  ``AI_NEWS_AUTOMATION_ENABLED`` — a manual dry run must keep working while that switch
-  stays off, which is the normal state once a scheduled workflow exists.
-* ``--test`` runs the whole pipeline, including approval, and sends to
+* ``--dry-run`` never contacts Telegram and never approves anything. Collection and
+  normalization still run for real — a fresh GitHub Actions runner starting from an
+  empty checkout genuinely selects, fetches and generates from a real candidate, not
+  just "reaches the RSS feeds and stops." What makes it dry is *where* those writes
+  land: an in-memory copy of the database (see ``automation.pipeline.isolated_connection``),
+  seeded with the real database's history so dedup still works, discarded when the run
+  ends. Runs regardless of ``AI_NEWS_AUTOMATION_ENABLED`` — a manual dry run must keep
+  working while that switch stays off, which is the normal state once a scheduled
+  workflow exists.
+* ``--test`` runs the same real pipeline, including approval, and sends to
   ``AI_NEWS_TEST_CHANNEL`` rather than the production channel — also regardless of
-  ``AI_NEWS_AUTOMATION_ENABLED``, for the same reason. Its writes (the Evaluation, the
-  Draft, the approval, the Publication row) land in a throwaway in-memory copy of the
-  database, never the real one, so a test send can never make a candidate unavailable
-  to a later live run or count against the live daily limit — see
-  ``automation.pipeline.run_automation``'s docstring. Only the Telegram message itself
-  is real.
-* the default (neither flag) is a live run against the production channel, and this is
-  the ONE mode ``AI_NEWS_AUTOMATION_ENABLED`` gates — a plain ``ai-news auto once`` (or
-  a scheduled run, which is always this mode) with the kill switch off does nothing and
-  says so, rather than needing a separate flag to stay safe.
+  ``AI_NEWS_AUTOMATION_ENABLED``, for the same reason. Collection, normalization,
+  selection, generation, validation, approval and the Publication record all land in
+  that same throwaway in-memory copy, never the real database, so a test send can
+  never make a candidate unavailable to a later live run, count against the live daily
+  limit, or leave any trace a human reading production history would mistake for a
+  real one. Only the Telegram message itself is real.
+* the default (neither flag) is a live run against the production channel, writing to
+  the real database throughout, and this is the ONE mode ``AI_NEWS_AUTOMATION_ENABLED``
+  gates — a plain ``ai-news auto once`` (or a scheduled run, which is always this mode)
+  with the kill switch off does nothing and says so, rather than needing a separate
+  flag to stay safe.
 
 Nothing here can approve a PROMPT or a TESTED_USE_CASE, because nothing here looks for
 one — nothing in this module content-type-filters at all; the automation pipeline itself
@@ -39,8 +46,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from ai_news_editor.automation.pipeline import AutomationResult, Outcome, run_automation
-from ai_news_editor.domain.clock import now_utc
+from ai_news_editor.automation.pipeline import AutomationResult, Outcome, run_pass
 from ai_news_editor.domain.enums import PublicationStatus
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.observability.logging import get_logger
@@ -66,41 +72,26 @@ def _settings() -> Settings:
 
 
 def _run_once(*, mode: str) -> AutomationResult:
-    """Collect, normalize, then hand off to run_automation. Shared by once/run."""
+    """Open the canonical database and hand off to run_pass. Shared by once/run.
+
+    Everything about collection, normalization and which database actually gets
+    written to lives in automation.pipeline.run_pass now — this function's only job is
+    the CLI-specific part: load settings, open and eventually close the one real,
+    on-disk connection every mode starts from.
+    """
     from ai_news_editor.cli.main import open_migrated_database
-    from ai_news_editor.pipeline.collect import collect as collect_sources
-    from ai_news_editor.pipeline.process import process as run_processing
-    from ai_news_editor.sources.config import load_sources_config
-    from ai_news_editor.sources.http import HttpClient
 
     settings = _settings()
     connection = open_migrated_database()
     try:
-        # Collection and normalization run through the same functions 'ai-news collect'
-        # and 'ai-news process' use, for the same reason a human would run them before
-        # reviewing: nothing downstream should ever look at raw, undeduplicated items.
-        # A dry run passes collect()'s own dry_run flag, which fetches and parses but
-        # writes nothing — so a dry run genuinely leaves no trace, exactly as promised.
-        try:
-            config = load_sources_config(settings.sources_config_path)
-            with HttpClient() as http:
-                collect_sources(
-                    connection, http, config,
-                    run_id=now_utc().strftime("%Y%m%dT%H%M%SZ"),
-                    dry_run=(mode == "dry-run"),
-                )
-            if mode != "dry-run":
-                run_processing(connection)
-        except AiNewsError as exc:
-            return AutomationResult(Outcome.CONFIG_ERROR, f"could not collect sources: {exc}")
-
-        return run_automation(connection, settings, mode=mode)  # type: ignore[arg-type]
+        return run_pass(connection, settings, mode=mode)  # type: ignore[arg-type]
     finally:
         # Fold the WAL into the main file before closing, rather than trusting SQLite's
         # own close-time checkpoint. The GitHub Actions workflow commits only the main
         # .sqlite3 path to git — see storage.db.checkpoint's docstring — and this is
         # the one place every 'auto once' invocation is guaranteed to pass through,
-        # regardless of mode or outcome.
+        # regardless of mode or outcome. Harmless to run even for dry-run/test, whose
+        # writes never touched this connection in the first place.
         db.checkpoint(connection)
         connection.close()
 
