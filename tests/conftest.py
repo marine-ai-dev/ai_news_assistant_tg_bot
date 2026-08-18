@@ -232,7 +232,7 @@ def fetch_states(connection: sqlite3.Connection) -> SourceFetchStateRepository:
 
 DRAFT_CONTENT: dict[str, object] = {
     "title": "Placeholder draft",
-    "body": "Placeholder body text for the test suite.",
+    "body": "Placeholder body text for the test suite covering edit flows.",
     "category": Category.PRODUCT_UPDATE,
     "audience": AudienceTier.BEGINNER,
     # The real format source_line() produces ("🔗 Джерело: <label>\n<url>"), so

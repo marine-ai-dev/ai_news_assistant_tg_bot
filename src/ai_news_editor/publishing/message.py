@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from html import unescape
 
 from ai_news_editor.domain.models import DraftVersion
-from ai_news_editor.writing.format import ALLOWED_TAGS, render_version
+from ai_news_editor.writing.format import (
+    ALLOWED_TAGS,
+    render_version,
+    source_url_of,
+    unescape_markdown_v2,
+)
 
 #: Bot API sendMessage text limit, in UTF-16 code units. See :func:`telegram_length`.
 MAX_MESSAGE_CHARS = 4096
@@ -112,10 +117,18 @@ def approved_text(version: DraftVersion) -> str:
 def build_message(version: DraftVersion) -> TelegramMessage:
     """Build the payload for an approved version.
 
-    Plain text is used whenever the post contains no markup, which is the normal case
-    for this channel. Plain text cannot be misparsed: there is no escaping to get wrong
-    and no way for a stray character to change how a sentence reads. HTML mode is used
-    only when the writer actually used one of the permitted tags.
+    Three cases, in order:
+
+    * a NEWS post (has a source — see ``writing.format.render_post``) is always
+      MarkdownV2. Its text is already fully escaped by the renderer itself at the point
+      each headline/paragraph/source-label fragment was inserted, so ``payload_text``
+      is exactly ``approved_text`` — there is nothing left for this function to do.
+    * editorial-original content that uses one of the permitted HTML tags (a writer's
+      own deliberate ``<b>``/``<a>``) still uses HTML mode, escaping everything outside
+      those tags.
+    * anything else is sent as plain text. Plain text cannot be misparsed: there is no
+      escaping to get wrong and no way for a stray character to change how a sentence
+      reads.
 
     Raises:
         MessageTooLongError: the post will not fit in one Telegram message. Phase 7
@@ -124,9 +137,12 @@ def build_message(version: DraftVersion) -> TelegramMessage:
     """
     text = approved_text(version)
 
-    if uses_markup(text):
+    if source_url_of(version):
+        payload_text = text
+        parse_mode: str | None = "MarkdownV2"
+    elif uses_markup(text):
         payload_text = escape_html(text)
-        parse_mode: str | None = "HTML"
+        parse_mode = "HTML"
     else:
         payload_text = text
         parse_mode = None
@@ -166,4 +182,6 @@ def displayed_text(message: TelegramMessage) -> str:
     """The approved text recovered from the payload that will be sent."""
     if message.parse_mode is None:
         return message.payload_text
+    if message.parse_mode == "MarkdownV2":
+        return unescape_markdown_v2(message.payload_text)
     return unescape_html(message.payload_text)

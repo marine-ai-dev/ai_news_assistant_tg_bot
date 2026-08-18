@@ -236,12 +236,19 @@ class TelegramClient:
         return int(linked) if isinstance(linked, int) else None
 
     def send_photo(
-        self, chat_id: str, path: Path, *, caption: str | None = None
+        self,
+        chat_id: str,
+        path: Path,
+        *,
+        caption: str | None = None,
+        parse_mode: str | None = None,
     ) -> SentMessage:
         """Upload one photo, optionally carrying the post as its caption."""
         data: dict[str, Any] = {"chat_id": chat_id}
         if caption is not None:
             data["caption"] = caption
+        if parse_mode is not None:
+            data["parse_mode"] = parse_mode
         return self._send_upload("sendPhoto", data, {"photo": path})
 
     def send_document(

@@ -35,7 +35,7 @@ from pathlib import Path
 
 from ai_news_editor.domain.enums import MediaOrigin
 from ai_news_editor.domain.models import DraftVersion, MediaAsset
-from ai_news_editor.writing.format import render_version
+from ai_news_editor.publishing.message import build_message
 
 #: Bot API caption limit, in UTF-16 code units. The exact figure could not be re-read
 #: from the documentation in this session — the page truncates before the sendPhoto
@@ -84,6 +84,11 @@ class Step:
     #: What a human reads in the dry run. Never contains a token or an absolute path.
     summary: str
     text: str | None = None
+    #: Set together with ``text`` — see build_plan. ``None`` means send as plain text;
+    #: never left for the caller to work out separately from a bare string, which is
+    #: exactly the gap that once let a NEWS post's markup reach Telegram unescaped and
+    #: unparsed (rich.run_step used to build its own payload from ``text`` alone).
+    parse_mode: str | None = None
     assets: tuple[MediaAsset, ...] = ()
     #: True when this step needs the channel's linked discussion group rather than the
     #: channel itself.
@@ -176,7 +181,12 @@ def build_plan(
         PlanError: an approved asset is missing or unusable. Raised here, so a bundle
             fails whole rather than arriving in pieces.
     """
-    text = render_version(version)
+    # build_message is the one place text and parse_mode are decided together — see its
+    # own docstring. Every Step below carries both, exactly as it computed them, rather
+    # than each call site re-deriving (or forgetting to derive) a parse_mode of its own.
+    message = build_message(version)
+    text = message.payload_text
+    parse_mode = message.parse_mode
     images = tuple(a for a in publishable_media(version) if a.role.value != "PDF")
     documents = tuple(a for a in publishable_media(version) if a.role.value == "PDF")
 
@@ -198,6 +208,7 @@ def build_plan(
                 method="sendPhoto",
                 summary=f"photo {images[0].reference} with the full post as caption",
                 text=text,
+                parse_mode=parse_mode,
                 assets=images,
             )
         )
@@ -238,6 +249,7 @@ def build_plan(
                 method="sendMessage",
                 summary="the approved post, in full",
                 text=text,
+                parse_mode=parse_mode,
             )
         )
     else:
@@ -247,6 +259,7 @@ def build_plan(
                 method="sendMessage",
                 summary="the approved post, in full",
                 text=text,
+                parse_mode=parse_mode,
             )
         )
 

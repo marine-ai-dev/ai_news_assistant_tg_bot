@@ -13,10 +13,12 @@ from ai_news_editor.writing.format import (
     UnsafeLinkError,
     check_length,
     disallowed_tags,
+    escape_markdown_v2,
     hard_limit_problem,
     has_any_markup,
     render_post,
     source_line,
+    unescape_markdown_v2,
     validate_url,
 )
 
@@ -75,12 +77,12 @@ class TestPostAssembly:
     def test_rendered_post_contains_every_part(self) -> None:
         text = render_post(
             headline="🆕 Заголовок",
-            body="Тіло допису.",
+            body="Тіло допису",
             source_label="OpenAI",
             source_url="https://openai.com/x",
         )
         assert "🆕 Заголовок" in text
-        assert "Тіло допису." in text
+        assert "Тіло допису" in text
         assert "https://openai.com/x" in text
 
     def test_rendering_is_deterministic(self) -> None:
@@ -109,18 +111,18 @@ class TestNewsStyleRendering:
 
     def test_the_headline_is_bold_and_emoji_led(self) -> None:
         text = render_post(
-            headline="Новина дня", body="Один абзац тексту.",
+            headline="Новина дня", body="Один абзац тексту",
             source_label="Google", source_url="https://x.invalid/a",
             category=Category.PRODUCT_UPDATE,
         )
-        assert text.startswith("<b>🚀 Новина дня</b>")
+        assert text.startswith("*🚀 Новина дня*")
 
     def test_an_unknown_category_falls_back_to_the_default_emoji(self) -> None:
         text = render_post(
-            headline="Новина", body="Текст.",
+            headline="Новина", body="Текст",
             source_label="X", source_url="https://x.invalid/a", category=None,
         )
-        assert text.startswith("<b>🧩 Новина</b>")
+        assert text.startswith("*🧩 Новина*")
 
     @pytest.mark.parametrize(
         "category,emoji",
@@ -134,54 +136,107 @@ class TestNewsStyleRendering:
         self, category: Category, emoji: str
     ) -> None:
         text = render_post(
-            headline="Х", body="Текст.", source_label="X",
+            headline="Х", body="Текст", source_label="X",
             source_url="https://x.invalid/a", category=category,
         )
-        assert text.startswith(f"<b>{emoji} Х</b>")
+        assert text.startswith(f"*{emoji} Х*")
 
     def test_paragraphs_are_split_only_on_existing_blank_lines(self) -> None:
-        body = "Перший абзац.\n\nДругий абзац.\n\nТретій абзац."
+        body = "Перший абзац\n\nДругий абзац\n\nТретій абзац"
         text = render_post(
             headline="Н", body=body, source_label="X", source_url="https://x.invalid/a",
         )
-        assert "✨ Перший абзац." in text
-        assert "🛠 Другий абзац." in text
-        assert "🔍 Третій абзац." in text
+        assert "✨ Перший абзац" in text
+        assert "🛠 Другий абзац" in text
+        assert "🔍 Третій абзац" in text
         # Blank-line-separated: every paragraph line is its own block.
-        assert "\n\n✨ Перший абзац.\n\n🛠 Другий абзац.\n\n🔍 Третій абзац." in text
+        assert "\n\n✨ Перший абзац\n\n🛠 Другий абзац\n\n🔍 Третій абзац" in text
 
     def test_a_single_paragraph_body_is_not_force_split(self) -> None:
         text = render_post(
-            headline="Н", body="Одне суцільне речення без порожніх рядків.",
+            headline="Н", body="Одне суцільне речення без порожніх рядків",
             source_label="X", source_url="https://x.invalid/a",
         )
-        assert "✨ Одне суцільне речення без порожніх рядків." in text
+        assert "✨ Одне суцільне речення без порожніх рядків" in text
         assert text.count("🛠") == 0
 
     def test_paragraph_emoji_rotates_and_wraps(self) -> None:
-        body = "\n\n".join(f"Абзац {i}." for i in range(1, 8))  # 7 paragraphs, 6 emoji
+        body = "\n\n".join(f"Абзац {i}" for i in range(1, 8))  # 7 paragraphs, 6 emoji
         text = render_post(
             headline="Н", body=body, source_label="X", source_url="https://x.invalid/a",
         )
-        assert "✨ Абзац 1." in text
-        assert "✨ Абзац 7." in text  # wraps back to the first emoji
+        assert "✨ Абзац 1" in text
+        assert "✨ Абзац 7" in text  # wraps back to the first emoji
 
     def test_the_source_is_a_hidden_hyperlink_not_a_bare_url(self) -> None:
         text = render_post(
-            headline="Н", body="Т.", source_label="Google",
+            headline="Н", body="Т", source_label="Google",
             source_url="https://blog.google/x",
         )
-        assert '<a href="https://blog.google/x">Джерело: Google</a>' in text
-        # No standalone line consisting only of the raw URL.
-        assert "https://blog.google/x" not in text.replace(
-            '<a href="https://blog.google/x">Джерело: Google</a>', ""
-        )
+        assert "🔗 [Джерело: Google](https://blog.google/x)" in text
+        # No standalone occurrence of the raw URL outside the link target.
+        assert text.count("https://blog.google/x") == 1
 
     def test_editorial_content_without_a_source_keeps_the_plain_style(self) -> None:
         text = render_post(headline="Заголовок", body="Тіло.")
         assert text == "Заголовок\n\nТіло."
         assert "<b>" not in text
         assert "Джерело" not in text
+
+
+class TestMarkdownV2Escaping:
+    """escape_markdown_v2 / unescape_markdown_v2 — the pair that stands between
+    Gemini-or-writer text and a message Telegram either refuses to parse or renders as
+    something nobody wrote."""
+
+    @pytest.mark.parametrize("char", list("_*[]()~`>#+-=|{}.!\\"))
+    def test_every_special_character_is_escaped(self, char: str) -> None:
+        assert escape_markdown_v2(char) == f"\\{char}"
+
+    def test_ordinary_characters_are_untouched(self) -> None:
+        assert escape_markdown_v2("Привіт світ 123") == "Привіт світ 123"
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "Google (Gemini)",
+            "AI-powered",
+            "foo_bar",
+            "test!",
+            "[example]",
+            "100% успіху.",
+            "діапазон 1-10",
+            "прайс: $5 | безкоштовно",
+        ],
+    )
+    def test_escaping_round_trips_exactly(self, raw: str) -> None:
+        assert unescape_markdown_v2(escape_markdown_v2(raw)) == raw
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["Google (Gemini)", "AI-powered", "foo_bar", "test!", "[example]", "100% успіху."],
+    )
+    def test_a_rendered_post_stays_well_formed_with_dangerous_headline_text(
+        self, raw: str
+    ) -> None:
+        text = render_post(
+            headline=f"{raw} — новина", body="Т", source_label="X",
+            source_url="https://x.invalid/a",
+        )
+        # Every escaped special character from the raw headline appears with its
+        # backslash — nothing was silently stripped to make the message parseable.
+        for char in raw:
+            if char in "_*[]()~`>#+-=|{}.!\\":
+                assert f"\\{char}" in text
+        # And the source link this renderer always appends is still intact and last.
+        assert text.rstrip().endswith("[Джерело: X](https://x.invalid/a)")
+
+    def test_url_escaping_only_touches_backslash_and_close_paren(self) -> None:
+        text = render_post(
+            headline="Н", body="Т", source_label="X",
+            source_url="https://x.invalid/a(b)c",
+        )
+        assert "(https://x.invalid/a(b\\)c)" in text
 
 
 class TestAnyMarkupDetection:

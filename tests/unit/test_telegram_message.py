@@ -20,7 +20,12 @@ from ai_news_editor.publishing.message import (
     unescape_html,
     uses_markup,
 )
-from ai_news_editor.writing.format import render_version
+from ai_news_editor.writing.format import (
+    _MARKDOWN_V2_SPECIAL,
+    escape_markdown_v2,
+    render_version,
+    unescape_markdown_v2,
+)
 
 BODY = (
     "Компанія оновила застосунок: тепер він уміє більше, ніж раніше. Це помітно тим, "
@@ -137,7 +142,15 @@ class TestPayload:
         assert "parse_mode" not in message.to_payload("@c")
 
     def test_a_post_with_markup_uses_html(self) -> None:
-        message = build_message(version(body=f"<b>Увага.</b> {BODY}"))
+        """Legacy HTML mode survives for editorial-original content, where a writer's
+        own deliberate <b>/<a> is still theirs to use — NEWS posts (with a source) are
+        always MarkdownV2 instead; see TestNewsStylePayload."""
+        message = build_message(
+            version(
+                source_url=None, source_attribution="Матеріал каналу",
+                body=f"<b>Увага.</b> {BODY}",
+            )
+        )
         assert message.parse_mode == "HTML"
         assert message.to_payload("@c")["parse_mode"] == "HTML"
 
@@ -162,26 +175,39 @@ class TestContentExactness:
         message = build_message(subject)
         assert message.approved_text == render_version(subject)
 
-    def test_what_a_reader_sees_equals_what_was_approved_plain(self) -> None:
+    def test_what_a_reader_sees_recovers_the_unescaped_approved_content(self) -> None:
+        """For a NEWS post, render_version's own output is already MarkdownV2-escaped
+        (see writing.format.render_post) — displayed_text's job is the other direction:
+        undo that escaping, the way a reader's Telegram client would. The two meet
+        exactly at unescape_markdown_v2(render_version(subject))."""
         subject = version()
-        assert displayed_text(build_message(subject)) == render_version(subject)
+        assert displayed_text(build_message(subject)) == unescape_markdown_v2(
+            render_version(subject)
+        )
 
     def test_what_a_reader_sees_equals_what_was_approved_with_markup(self) -> None:
-        subject = version(body=f"<b>Увага.</b> Q&A. {BODY}")
+        subject = version(
+            source_url=None, source_attribution="Матеріал каналу",
+            body=f"<b>Увага.</b> Q&A. {BODY}",
+        )
         assert displayed_text(build_message(subject)) == render_version(subject)
 
     def test_the_headline_body_and_source_line_are_all_present(self) -> None:
         subject = version()
         text = build_message(subject).approved_text
         assert subject.title in text
-        assert subject.body in text
+        assert escape_markdown_v2(subject.body) in text
         assert "https://alpha.invalid/story" in text
         assert "Alpha Co" in text
 
     def test_nothing_is_reordered_or_reworded(self) -> None:
         subject = version()
         text = build_message(subject).approved_text
-        assert text.index(subject.title) < text.index(subject.body) < text.index("Джерело")
+        assert (
+            text.index(subject.title)
+            < text.index(escape_markdown_v2(subject.body))
+            < text.index("Джерело")
+        )
 
     def test_the_emoji_in_the_headline_is_not_changed(self) -> None:
         """The renderer prepends its own deterministic emoji, but a writer's own
@@ -214,53 +240,68 @@ class TestUnknownTags:
 
 
 class TestNewsStylePayload:
-    """The full pipeline for a NEWS post: render_version's HTML skeleton, then
-    build_message's escaping, end to end — the exact path a real automation post
-    takes on its way to Telegram."""
+    """The full pipeline for a NEWS post: render_version's MarkdownV2 text (already
+    escaped by the renderer itself), then build_message — the exact path a real
+    automation post takes on its way to Telegram. See publishing.plan / publishing.rich
+    for why this is the payload that actually reaches sendMessage, not just what
+    build_message computes in isolation — a real screenshot proved the two had drifted
+    apart once already (build_message was right; plan.py never called it)."""
 
-    def test_the_final_payload_is_html_with_a_bold_headline(self) -> None:
+    def test_the_final_payload_is_markdownv2_with_a_bold_headline(self) -> None:
         message = build_message(version())
-        assert message.parse_mode == "HTML"
-        assert message.payload_text.startswith("<b>")
-        assert "</b>" in message.payload_text
+        assert message.parse_mode == "MarkdownV2"
+        assert message.payload_text.startswith("*")
+        assert "*\n\n" in message.payload_text
+        # No HTML markup of any kind — the bug this replaces sent exactly this, raw.
+        assert "<b>" not in message.payload_text
+        assert "</b>" not in message.payload_text
 
     def test_paragraphs_stay_blank_line_separated_in_the_payload(self) -> None:
-        body = "Перший абзац.\n\nДругий абзац."
+        body = "Перший абзац\n\nДругий абзац"
         message = build_message(version(body=body))
         assert "\n\n" in message.payload_text
 
     def test_the_source_link_survives_and_no_bare_url_line_appears(self) -> None:
         message = build_message(version())
-        assert '<a href="https://alpha.invalid/story">' in message.payload_text
-        # The URL appears exactly once — inside the href, never again as bare text.
+        assert "[Джерело: Alpha Co](https://alpha.invalid/story)" in message.payload_text
+        # The URL appears exactly once — inside the link target, never again as bare text.
         assert message.payload_text.count("https://alpha.invalid/story") == 1
+        assert "<a href=" not in message.payload_text
 
-    @pytest.mark.parametrize("dangerous", ["Q&A", "5 < 6", "AI > hype", "<script>bad()"])
-    def test_headline_special_characters_are_escaped_not_left_raw(self, dangerous: str) -> None:
-        message = build_message(version(title=f"{dangerous} — новина"))
-        # The dangerous raw characters do not appear outside of our own inserted tags.
-        payload_without_our_tags = (
-            message.payload_text
-            .replace("<b>", "").replace("</b>", "")
-            .replace('<a href="https://alpha.invalid/story">', "").replace("</a>", "")
-        )
-        assert "<script>" not in payload_without_our_tags
-        # And the message still parses/sends as well-formed HTML: every remaining '<'
-        # belongs to one of our own two permitted tags.
-        assert unescape_html(message.payload_text)  # round-trips without raising
+    @pytest.mark.parametrize(
+        "raw",
+        ["Google (Gemini)", "AI-powered", "foo_bar", "test!", "[example]", "100% успіху."],
+    )
+    def test_headline_special_characters_are_escaped_and_readable(self, raw: str) -> None:
+        message = build_message(version(title=f"{raw} — новина"))
+        # The message is well-formed MarkdownV2: escaped, not stripped or rejected.
+        assert message.parse_mode == "MarkdownV2"
+        # The reader gets back exactly the raw text that was approved.
+        assert raw in displayed_text(message)
+        # And no unescaped special character from the raw title survives next to our
+        # own markup — every one of MarkdownV2's specials in the raw text is escaped.
+        for char in raw:
+            if char in _MARKDOWN_V2_SPECIAL:
+                assert f"\\{char}" in message.payload_text
 
     def test_body_special_characters_are_escaped(self) -> None:
-        message = build_message(version(body="Ціна < 100 & рейтинг > 90%."))
-        assert "Ціна &lt; 100 &amp; рейтинг &gt; 90%." in message.payload_text
+        message = build_message(version(body="Ціна < 100 та рейтинг > 90%."))
+        assert "90%\\." in message.payload_text
         # And the reader still sees exactly the raw approved text back out.
-        assert "Ціна < 100 & рейтинг > 90%." in displayed_text(message)
+        assert "Ціна < 100 та рейтинг > 90%." in displayed_text(message)
 
-    def test_a_source_url_with_an_ampersand_is_a_safe_attribute(self) -> None:
+    def test_a_source_url_with_a_closing_paren_is_a_safe_link_target(self) -> None:
         subject = version(
-            source_url="https://x.invalid/a?b=1&c=2",
-            source_attribution="🔗 Джерело: X\nhttps://x.invalid/a?b=1&c=2",
+            source_url="https://x.invalid/a(1)",
+            source_attribution="🔗 Джерело: X\nhttps://x.invalid/a(1)",
         )
         message = build_message(subject)
-        assert 'href="https://x.invalid/a?b=1&amp;c=2"' in message.payload_text
-        # No unescaped bare '&' remains outside of an entity in the href.
-        assert "b=1&c=2" not in message.payload_text
+        assert "(https://x.invalid/a(1\\))" in message.payload_text
+
+    def test_a_headline_with_parens_does_not_corrupt_the_source_link(self) -> None:
+        """'<' and '>' are not MarkdownV2 syntax and need no escaping (Telegram shows
+        them literally) — but '(' and ')' are, and a headline using them must not be
+        able to prematurely close the link this renderer builds at the end."""
+        message = build_message(version(title="<script>bad()</script> заголовок"))
+        assert "bad()</script> заголовок" in displayed_text(message)
+        assert "[Джерело: Alpha Co](https://alpha.invalid/story)" in message.payload_text

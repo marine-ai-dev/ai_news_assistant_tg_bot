@@ -243,6 +243,8 @@ def run_step(
             "text": step.text,
             "link_preview_options": {"is_disabled": True},
         }
+        if step.parse_mode is not None:
+            payload["parse_mode"] = step.parse_mode
         if step.to_discussion and main_message_id is not None:
             # A channel comment is a reply to the forwarded copy of the post in the
             # linked group. Bot API 10.2 spells this reply_parameters.
@@ -250,7 +252,8 @@ def run_step(
         sent = client.send_message(payload)
     elif step.method == "sendPhoto":
         sent = client.send_photo(
-            target, check_asset(step.assets[0], media_root), caption=step.text
+            target, check_asset(step.assets[0], media_root), caption=step.text,
+            parse_mode=step.parse_mode,
         )
     elif step.method == "sendDocument":
         sent = client.send_document(target, check_asset(step.assets[0], media_root))

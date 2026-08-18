@@ -98,27 +98,61 @@ def _split_paragraphs(body: str) -> list[str]:
     return paragraphs or [body.strip()]
 
 
-def _escape_attribute(value: str) -> str:
-    """Minimal escaping for a value placed inside an HTML attribute.
+#: Every character Telegram's MarkdownV2 parser treats as syntax and therefore requires
+#: escaped with a preceding backslash when it appears as literal text. See "Formatting
+#: options" in the Bot API docs — this is the exact set listed there, not a guess.
+_MARKDOWN_V2_SPECIAL = frozenset("_*[]()~`>#+-=|{}.!\\")
 
-    ``escape_html`` (publishing.message) leaves a recognized tag's own markup
-    untouched — it only escapes the text *between* tags — so the ``href`` value has to
-    be made attribute-safe here, at the point this renderer builds the tag itself.
+
+def escape_markdown_v2(text: str) -> str:
+    """Make raw text safe to place in a MarkdownV2 message as plain text.
+
+    Every one of Telegram's MarkdownV2 special characters becomes a literal, visible
+    character instead of syntax — this is what stands between a headline that happens to
+    contain ``!`` or ``(`` and a message Telegram refuses to parse (or worse, parses
+    into something nobody wrote). Applied to every writer/Gemini-supplied string before
+    it is placed inside this renderer's own ``*bold*`` / ``[text](url)`` — never to the
+    ``*``, ``[``, ``]``, ``(``, ``)`` this renderer inserts itself, which are meant as
+    syntax.
     """
-    return value.replace("&", "&amp;").replace('"', "&quot;")
+    return "".join(f"\\{ch}" if ch in _MARKDOWN_V2_SPECIAL else ch for ch in text)
+
+
+_MARKDOWN_V2_ESCAPE = re.compile(r"\\([_*\[\]()~`>#+\-=|{}.!\\])")
+
+
+def unescape_markdown_v2(text: str) -> str:
+    """The exact inverse of :func:`escape_markdown_v2`.
+
+    Removes the backslash from an escaped special character, recovering the raw
+    content that was there before escaping — the same role ``unescape_html`` plays for
+    the HTML path. This renderer's own unescaped ``*`` / ``[`` / ``]`` / ``(`` / ``)``
+    syntax is untouched (never preceded by a backslash in text this module produces),
+    exactly as ``unescape_html`` leaves its own permitted tags alone.
+    """
+    return _MARKDOWN_V2_ESCAPE.sub(r"\1", text)
+
+
+def _escape_markdown_v2_url(url: str) -> str:
+    """The narrower escaping MarkdownV2 requires inside a link's ``(...)`` target.
+
+    Per the Bot API docs, only ')' and '\\' need escaping there — the full special-set
+    escaping :func:`escape_markdown_v2` does is for *display* text, not a link target.
+    """
+    return url.replace("\\", "\\\\").replace(")", "\\)")
 
 
 def _headline_line(headline: str, category: Category | None) -> str:
     emoji = _DEFAULT_HEADLINE_EMOJI
     if category is not None:
         emoji = _HEADLINE_EMOJI.get(category, _DEFAULT_HEADLINE_EMOJI)
-    return f"<b>{emoji} {headline.strip()}</b>"
+    return f"*{emoji} {escape_markdown_v2(headline.strip())}*"
 
 
 def _body_lines(body: str) -> list[str]:
     paragraphs = _split_paragraphs(body)
     return [
-        f"{_PARAGRAPH_EMOJI[index % len(_PARAGRAPH_EMOJI)]} {paragraph}"
+        f"{_PARAGRAPH_EMOJI[index % len(_PARAGRAPH_EMOJI)]} {escape_markdown_v2(paragraph)}"
         for index, paragraph in enumerate(paragraphs)
     ]
 
@@ -127,7 +161,8 @@ def _source_hyperlink(source_label: str, source_url: str) -> str:
     """The attribution line: a hidden hyperlink, not a bare URL on its own line."""
     url = validate_url(source_url)
     label = source_label.strip() or "Джерело"
-    return f'🔗 <a href="{_escape_attribute(url)}">Джерело: {label}</a>'
+    link_text = escape_markdown_v2(f"Джерело: {label}")
+    return f"🔗 [{link_text}]({_escape_markdown_v2_url(url)})"
 
 
 @dataclass(frozen=True, slots=True)

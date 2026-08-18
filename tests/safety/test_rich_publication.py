@@ -728,3 +728,95 @@ class TestFullBundleExecution:
             client.send_document(CHANNEL, media_root / "collection.pdf", caption="опис")
 
         assert b"caption" in payloads[0]
+
+
+class TestActualOutboundPayloadCarriesParseMode:
+    """The regression class this project actually hit: writing.format.render_post was
+    correct, publishing.message.build_message was correct, and none of that mattered
+    because publishing.plan.build_plan built its Step.text from render_version()
+    directly and rich.run_step's sendMessage/sendPhoto payload never carried a
+    parse_mode at all — so Telegram received literal '*' / '[...]  (...)' as plain text.
+    These tests inspect the actual JSON body a mock transport receives, the same way a
+    real Telegram request would be inspected, not just what build_plan/build_message
+    compute in isolation."""
+
+    def _stored(self, connection: sqlite3.Connection, drafts: DraftRepository, seeded_article,
+                **overrides: object):  # type: ignore[no-untyped-def]
+        draft, created = drafts.create(
+            article_id=seeded_article.id, **{**DRAFT_CONTENT, **overrides}  # type: ignore[arg-type]
+        )
+        drafts.set_status(draft.id, DraftStatus.PENDING_REVIEW)
+        return drafts.get(draft.id), created
+
+    def _publication(self, connection: sqlite3.Connection, draft, version):  # type: ignore[no-untyped-def]
+        from ai_news_editor.domain.models import Publication
+        from ai_news_editor.publishing.gate import approve_draft
+
+        authorization = approve_draft(connection, draft.id)
+        return PublicationRepository(connection).add(
+            Publication(
+                draft_id=draft.id,
+                draft_version_id=version.id,
+                review_decision_id=authorization.decision_id,
+                content_hash=version.content_hash,
+                channel=CHANNEL,
+                status=PublicationStatus.FAILED,
+                failure_reason="placeholder attempt row for payload-shape tests",
+            )
+        )
+
+    def test_the_real_sendmessage_payload_carries_parse_mode_markdownv2(
+        self, connection: sqlite3.Connection, seeded_article, drafts: DraftRepository,
+        media_root: Path,
+    ) -> None:
+        draft, stored = self._stored(connection, drafts, seeded_article)
+        publication = self._publication(connection, draft, stored)
+        plan = build_plan(stored, media_root=media_root, discussion_available=False)
+        transport = Recorder()
+
+        with TelegramClient(TOKEN, transport=transport) as client:
+            execute(
+                connection, client, plan, stored,
+                publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
+                discussion_chat_id=None, media_root=media_root,
+            )
+
+        send_message_payloads = [
+            p for method, p in zip(transport.calls, transport.payloads, strict=True)
+            if method == "sendMessage"
+        ]
+        assert len(send_message_payloads) == 1
+        payload = send_message_payloads[0]
+        assert payload["parse_mode"] == "MarkdownV2"
+        assert "*" in payload["text"]
+        assert "[Джерело: Example](https://example.invalid/item)" in payload["text"]
+        assert "<b>" not in payload["text"]
+        assert "<a href=" not in payload["text"]
+
+    def test_the_real_payload_matches_build_message_exactly(
+        self, connection: sqlite3.Connection, seeded_article, drafts: DraftRepository,
+        media_root: Path,
+    ) -> None:
+        """The two must never drift apart again — assert bit-for-bit equality with
+        what build_message computes in isolation, not just similarity."""
+        from ai_news_editor.publishing.message import build_message
+
+        draft, stored = self._stored(connection, drafts, seeded_article)
+        publication = self._publication(connection, draft, stored)
+        plan = build_plan(stored, media_root=media_root, discussion_available=False)
+        transport = Recorder()
+
+        with TelegramClient(TOKEN, transport=transport) as client:
+            execute(
+                connection, client, plan, stored,
+                publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
+                discussion_chat_id=None, media_root=media_root,
+            )
+
+        expected = build_message(stored)
+        payload = next(
+            p for method, p in zip(transport.calls, transport.payloads, strict=True)
+            if method == "sendMessage"
+        )
+        assert payload["text"] == expected.payload_text
+        assert payload["parse_mode"] == expected.parse_mode
