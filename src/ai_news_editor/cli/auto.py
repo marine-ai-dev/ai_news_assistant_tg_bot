@@ -181,7 +181,7 @@ def auto_once(
     result = _run_once(mode=mode)
     _report(result)
     _emit_github_output(result)
-    if not result.is_quiet:
+    if not result.is_quiet and not result.published:
         raise typer.Exit(code=1)
 
 
@@ -196,7 +196,7 @@ def auto_run() -> None:
     result = _run_once(mode="live")
     _report(result)
     _emit_github_output(result)
-    if not result.is_quiet:
+    if not result.is_quiet and not result.published:
         raise typer.Exit(code=1)
 
 
