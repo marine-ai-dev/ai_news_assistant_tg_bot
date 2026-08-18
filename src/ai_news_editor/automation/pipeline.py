@@ -145,6 +145,12 @@ class Outcome(StrEnum):
     FULLTEXT_UNAVAILABLE = "FULLTEXT_UNAVAILABLE"
     GENERATION_REJECTED = "GENERATION_REJECTED"
     VALIDATION_FAILED = "VALIDATION_FAILED"
+    #: Every candidate attempt (bounded by settings.max_candidate_attempts) ran into a
+    #: candidate-specific rejection — distinct from NO_CANDIDATE (nothing was even
+    #: eligible to try) and from each of the three per-candidate outcomes above (which
+    #: now only end a run on their own when the very first attempt already exhausts
+    #: every remaining candidate — see _run_pipeline).
+    CANDIDATES_EXHAUSTED = "CANDIDATES_EXHAUSTED"
     CONFIG_ERROR = "CONFIG_ERROR"
     GEMINI_ERROR = "GEMINI_ERROR"
     PUBLISH_ERROR = "PUBLISH_ERROR"
@@ -162,6 +168,7 @@ QUIET_OUTCOMES = frozenset(
         Outcome.FULLTEXT_UNAVAILABLE,
         Outcome.GENERATION_REJECTED,
         Outcome.VALIDATION_FAILED,
+        Outcome.CANDIDATES_EXHAUSTED,
     }
 )
 
@@ -365,60 +372,37 @@ def _run_pipeline(
             Outcome.NO_CANDIDATE, "no eligible NEWS candidate from an official source."
         )
 
-    # 6. Select. A rejection or an invalid answer is a quiet, successful no-op — the
-    # infrastructure worked; there was simply nothing worth publishing today.
+    # 6-9. Select, fetch, generate, validate — bounded across up to
+    # settings.max_candidate_attempts distinct candidates, one Gemini client reused for
+    # all of them. A candidate-specific rejection (bad fulltext, an incomplete or
+    # rejected generation, a validation failure) moves on to the next remaining
+    # candidate rather than ending the run; a genuine infrastructure failure
+    # (GeminiError — a bad key, an exhausted transient-retry budget, a permanent
+    # rejection of the request itself) still aborts the whole run immediately, exactly
+    # as before — that failure is not specific to whichever candidate was being tried
+    # when it happened, and trying two more candidates would not change the outcome,
+    # only spend two more Gemini calls finding that out. See run_candidates_loop below
+    # for exactly which exceptions land in which bucket.
     try:
         with GeminiClient(
             settings.gemini_api_key.get_secret_value(), model=settings.llm_model,
             read_timeout=settings.gemini_read_timeout_seconds,
         ) as client:
-            try:
-                selection = select_candidate(client, candidates)
-            except SelectionRejected as exc:
-                return AutomationResult(
-                    Outcome.SELECTION_REJECTED, exc.reason, candidates_considered=len(candidates)
-                )
-            except SelectionInvalid as exc:
-                return AutomationResult(
-                    Outcome.SELECTION_REJECTED, str(exc), candidates_considered=len(candidates)
-                )
-
-            # 7. Full text. Fail-closed: no usable article text, no generation attempt.
-            fulltext = fetch_fulltext(selection.candidate.url)
-            if not fulltext.ok:
-                return AutomationResult(
-                    Outcome.FULLTEXT_UNAVAILABLE,
-                    f"{selection.candidate.url}: {fulltext.reason}",
-                    candidates_considered=len(candidates),
-                )
-
-            # 8. Generate.
-            try:
-                post = generate_post(
-                    client,
-                    candidate=selection.candidate,
-                    article_text=fulltext.text or "",
-                    confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD,
-                )
-            except GenerationRejected as exc:
-                return AutomationResult(
-                    Outcome.GENERATION_REJECTED, exc.reason, candidates_considered=len(candidates)
-                )
+            outcome = _attempt_candidates(
+                client, connection, candidates, by_id,
+                max_attempts=settings.max_candidate_attempts, run_id=run_id,
+            )
     except GeminiError as exc:
         return AutomationResult(
             Outcome.GEMINI_ERROR, str(exc), candidates_considered=len(candidates)
         )
 
-    article = by_id[selection.candidate.id]
+    if isinstance(outcome, AutomationResult):
+        # SELECTION_REJECTED (the whole offered list, not one candidate) or
+        # CANDIDATES_EXHAUSTED — nothing more to try.
+        return outcome
 
-    # 9. Canonical validation — pure, in-memory, and identical in every mode. Nothing
-    # has touched storage yet.
-    try:
-        validated = _validate_post(connection, article, post, run_id=run_id)
-    except (DraftImportError, AiNewsError) as exc:
-        return AutomationResult(
-            Outcome.VALIDATION_FAILED, str(exc), candidates_considered=len(candidates)
-        )
+    article, validated = outcome
 
     if mode == "dry-run":
         # Nothing was written: no Evaluation row, no Draft row, no approval, no send.
@@ -491,6 +475,107 @@ def _run_pipeline(
         draft_id=draft_id,
         message_id=publication.message_id,
         channel=target_channel,
+    )
+
+
+def _attempt_candidates(
+    client: GeminiClient,
+    connection: sqlite3.Connection,
+    candidates: list[SelectionCandidate],
+    by_id: dict[str, Article],
+    *,
+    max_attempts: int,
+    run_id: str,
+) -> AutomationResult | tuple[Article, _Validated]:
+    """Try up to ``max_attempts`` distinct candidates, selected one at a time from
+    what remains, until one produces a validated post or the budget (or the candidate
+    pool itself) runs out.
+
+    Returns the found ``(article, _Validated)`` pair on success, or the terminal
+    :class:`AutomationResult` once nothing panned out:
+
+    * ``SELECTION_REJECTED`` if Gemini declined the *offered list itself* — not
+      specific to one candidate, so narrowing the list on a later attempt would not
+      plausibly change that answer, and this ends the run immediately rather than
+      spending the rest of the attempt budget re-asking a version of the same question.
+    * ``CANDIDATES_EXHAUSTED`` once every attempt used up a genuine
+      candidate-specific rejection instead (bad fulltext, an incomplete or rejected
+      generation, a failed local validation) and there is nothing left to try.
+
+    Deliberately catches only the narrow, already-established exceptions that mean
+    "this one candidate did not work out" — :exc:`GenerationRejected` and the
+    ``DraftImportError`` / ``AiNewsError`` pair from validation, plus a plain
+    ``fulltext.ok`` check. Everything else — a :exc:`GeminiError` from an invalid key,
+    an exhausted transient-retry budget, or a permanent request rejection — is left to
+    propagate to the caller, whose own ``except GeminiError`` turns it into the loud
+    ``GEMINI_ERROR`` outcome. That is what stops a global infrastructure failure from
+    being silently retried against two more candidates instead of surfacing at all.
+    """
+    remaining = list(candidates)
+    attempted: list[str] = []
+
+    def _reject(attempt: int, stage: str, candidate: SelectionCandidate, reason: str) -> None:
+        attempted.append(f"{candidate.source_name} ({candidate.url}): {stage} — {reason}")
+        logger.info(
+            "candidate rejected",
+            extra={
+                "attempt": attempt, "stage": stage,
+                "source": candidate.source_name, "reason": reason,
+            },
+        )
+
+    for attempt in range(1, max_attempts + 1):
+        if not remaining:
+            break
+
+        try:
+            selection = select_candidate(client, remaining)
+        except SelectionRejected as exc:
+            return AutomationResult(
+                Outcome.SELECTION_REJECTED, exc.reason, candidates_considered=len(candidates)
+            )
+        except SelectionInvalid as exc:
+            return AutomationResult(
+                Outcome.SELECTION_REJECTED, str(exc), candidates_considered=len(candidates)
+            )
+
+        candidate = selection.candidate
+        # Removed the instant it is selected, win or lose — a candidate a later
+        # attempt might otherwise re-offer to Gemini after this one failed downstream.
+        remaining = [c for c in remaining if c.id != candidate.id]
+        article = by_id[candidate.id]
+
+        fulltext = fetch_fulltext(candidate.url)
+        if not fulltext.ok:
+            _reject(attempt, "fulltext", candidate, fulltext.reason or "unavailable")
+            continue
+
+        try:
+            post = generate_post(
+                client, candidate=candidate, article_text=fulltext.text or "",
+                confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD,
+            )
+        except GenerationRejected as exc:
+            _reject(attempt, "generation", candidate, exc.reason)
+            continue
+
+        try:
+            validated = _validate_post(connection, article, post, run_id=run_id)
+        except (DraftImportError, AiNewsError) as exc:
+            _reject(attempt, "validation", candidate, str(exc))
+            continue
+
+        logger.info(
+            "candidate accepted",
+            extra={"attempt": attempt, "source": candidate.source_name, "url": candidate.url},
+        )
+        return article, validated
+
+    return AutomationResult(
+        Outcome.CANDIDATES_EXHAUSTED,
+        f"tried {len(attempted)} candidate(s), none produced a publishable post. "
+        + " | ".join(attempted),
+        candidates_considered=len(candidates),
     )
 
 

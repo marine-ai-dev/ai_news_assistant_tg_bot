@@ -158,6 +158,35 @@ class TestGeminiReadTimeout:
             _settings(gemini_read_timeout_seconds=-5)
 
 
+class TestMaxCandidateAttempts:
+    """Same blank-string-from-GitHub-Actions problem as daily_post_limit and
+    gemini_read_timeout_seconds above, and the same fix."""
+
+    def test_default_is_3(self) -> None:
+        assert Settings.DEFAULT_MAX_CANDIDATE_ATTEMPTS == 3
+        assert _settings().max_candidate_attempts == 3
+
+    def test_blank_falls_back_to_the_default_not_a_parse_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_MAX_CANDIDATE_ATTEMPTS", "")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.max_candidate_attempts == 3
+
+    def test_an_explicit_value_from_the_environment_is_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_MAX_CANDIDATE_ATTEMPTS", "5")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.max_candidate_attempts == 5
+
+    def test_zero_or_negative_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            _settings(max_candidate_attempts=0)
+        with pytest.raises(ValidationError):
+            _settings(max_candidate_attempts=-1)
+
+
 class TestAFreshCloneStarts:
     """The .env.example a newcomer copies must actually work.
 

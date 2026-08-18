@@ -166,6 +166,18 @@ class TestRepositoryVariableWiring:
             == "${{ vars.AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS }}"
         )
 
+    def test_max_candidate_attempts_is_forwarded_from_the_repository_variable(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """A blank/absent Variable must fall back to Settings' own default (3), not
+        error — see Settings._blank_means_the_default, exercised directly in
+        tests/unit/test_settings.py::TestMaxCandidateAttempts."""
+        env = _step(workflow, "Run automation")["env"]
+        assert (
+            env["AI_NEWS_MAX_CANDIDATE_ATTEMPTS"]
+            == "${{ vars.AI_NEWS_MAX_CANDIDATE_ATTEMPTS }}"
+        )
+
 
 class TestStatePersistence:
     def test_persist_step_requires_live_mode_and_a_published_outcome(

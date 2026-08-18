@@ -140,6 +140,58 @@ def fake_gemini_transport(
     return transport
 
 
+def sequenced_gemini_transport(*payloads: dict[str, Any]) -> httpx.MockTransport:
+    """One payload per call, in the exact order given — unlike fake_gemini_transport
+    (which only ever plays a single select/generate pair), this is what the candidate
+    fallback loop needs: select, generate-fails, select-again, generate-again, and so
+    on, however many rounds one test expects. Calling this transport more times than
+    there are payloads is a test bug, and fails loudly rather than reusing the last one.
+    """
+    calls: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content))
+        assert len(calls) <= len(payloads), (
+            f"gemini was called a {len(calls)}th time; only {len(payloads)} canned "
+            "responses were configured for this test"
+        )
+        payload = payloads[len(calls) - 1]
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {"parts": [{"text": json.dumps(payload)}]},
+                        "finishReason": "STOP",
+                    }
+                ]
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    transport.calls = calls  # type: ignore[attr-defined]
+    return transport
+
+
+def routed_fulltext_transport(responses: dict[str, tuple[int, str | None]]) -> httpx.MockTransport:
+    """Per-candidate fulltext control: maps an exact article URL to (status_code,
+    html_or_None). A URL not in the map gets a normal, genuinely-long-enough article —
+    the same default fake_fulltext_transport() uses — so a test only has to specify
+    the candidate(s) it cares about making fail.
+    """
+    default_html = (
+        "<html><body><article><p>" + (REAL_ARTICLE_TEXT * 3) + "</p></article></body></html>"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        status, html = responses.get(url, (200, default_html))
+        body = html if html is not None else default_html
+        return httpx.Response(status, headers={"content-type": "text/html"}, content=body.encode())
+
+    return httpx.MockTransport(handler)
+
+
 def fake_fulltext_transport(
     *, article_html: str | None = None, status_code: int = 200
 ) -> httpx.MockTransport:
@@ -677,9 +729,12 @@ class TestFailClosedPaths:
 
         result = run_automation(connection, settings, mode="live")
 
-        assert result.outcome is Outcome.GENERATION_REJECTED, (
+        # Only one candidate was seeded, so once it is rejected there is nothing left
+        # to fall back to — CANDIDATES_EXHAUSTED, not a crash, and still quiet.
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED, (
             f"expected a quiet rejection, got {result.outcome}: {result.detail}"
         )
+        assert result.is_quiet
         assert PublicationRepository(connection).count() == 0
 
     def test_a_permanent_gemini_rejection_during_selection_is_loud_not_quiet(
@@ -727,7 +782,10 @@ class TestFailClosedPaths:
             ),
         )
         result = run_automation(connection, settings, mode="live")
-        assert result.outcome is Outcome.FULLTEXT_UNAVAILABLE
+        # Only one candidate was seeded — exhausted, not the bare per-candidate
+        # outcome, once it is the only attempt and it fails.
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert "fulltext" in result.detail
         assert result.is_quiet
         assert DraftRepository(connection).list_by_status(DraftStatus.PENDING_REVIEW) == []
 
@@ -749,7 +807,8 @@ class TestFailClosedPaths:
             telegram_transport=None,
         )
         result = run_automation(connection, settings, mode="live")
-        assert result.outcome is Outcome.GENERATION_REJECTED
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert "generation" in result.detail
         assert PublicationRepository(connection).count() == 0
 
     def test_a_url_that_does_not_match_the_candidate_is_rejected(
@@ -767,7 +826,7 @@ class TestFailClosedPaths:
             telegram_transport=None,
         )
         result = run_automation(connection, settings, mode="live")
-        assert result.outcome is Outcome.GENERATION_REJECTED
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
         assert "does not match" in result.detail
         assert PublicationRepository(connection).count() == 0
 
@@ -787,7 +846,7 @@ class TestFailClosedPaths:
         )
         before = snapshot(connection)
         result = run_automation(connection, settings, mode="live")
-        assert result.outcome is Outcome.GENERATION_REJECTED
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
         assert snapshot(connection) == before
 
     def test_a_blank_generated_body_fails_canonical_draftresult_validation(
@@ -809,7 +868,8 @@ class TestFailClosedPaths:
             telegram_transport=None,
         )
         result = run_automation(connection, settings, mode="live")
-        assert result.outcome is Outcome.VALIDATION_FAILED
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert "validation" in result.detail
         assert PublicationRepository(connection).count() == 0
 
     def test_daily_limit_reached_publishes_nothing(
@@ -1558,3 +1618,274 @@ class TestFullPassEndToEnd:
 
         assert result.outcome is Outcome.NO_CANDIDATE
         assert result.is_quiet
+
+
+class TestCandidateFallback:
+    """One bad candidate must not end a run that still has other eligible candidates
+    — see _attempt_candidates. The real-world trigger: a real GitHub Actions run had
+    Gemini select an official OpenAI article, then got HTTP 403 fetching its fulltext,
+    and the entire run ended there even though 14 other eligible candidates existed.
+    """
+
+    def test_candidate_1_fulltext_403_falls_back_to_candidate_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        first_id, second_id = candidates[0].id, candidates[1].id
+        first_article, second_article = by_id[first_id], by_id[second_id]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": first_id},
+            {"selected_id": second_id},
+            {**VALID_GENERATION, "source_url": second_article.canonical_url},
+        )
+        telegram = fake_telegram_transport()
+        patch_clients(
+            monkeypatch, gemini_transport=gemini, telegram_transport=telegram,
+            fulltext_transport=routed_fulltext_transport(
+                {first_article.canonical_url: (403, None)}
+            ),
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert result.channel == settings.telegram_channel
+        assert PublicationRepository(connection).count() == 1
+
+    def test_candidate_1_generation_rejected_falls_back_to_candidate_2(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        first_id, second_id = candidates[0].id, candidates[1].id
+        second_article = by_id[second_id]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": first_id},
+            {"content_type": "NEWS", "rejection_reason": "too vague to write from"},
+            {"selected_id": second_id},
+            {**VALID_GENERATION, "source_url": second_article.canonical_url},
+        )
+        telegram = fake_telegram_transport()
+        patch_clients(monkeypatch, gemini_transport=gemini, telegram_transport=telegram)
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert PublicationRepository(connection).count() == 1
+
+    def test_a_candidate_that_becomes_a_duplicate_after_selection_falls_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """eligibility_problem() re-checks at validation time, not just when the
+        candidate list was first built, specifically for this race: something else —
+        a concurrent run, a human import — evaluates the same article in between.
+        Simulated here via a transport side effect that lands exactly that Evaluation
+        the instant candidate 1 is selected, mid-run."""
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        first_id, second_id = candidates[0].id, candidates[1].id
+        first_article, second_article = by_id[first_id], by_id[second_id]
+
+        from ai_news_editor.domain.enums import (
+            AudienceTier,
+            Category,
+            EditorialDecision,
+            VerificationStatus,
+        )
+        from ai_news_editor.domain.models import Evaluation
+
+        # Round 1 selects and *generates* successfully for candidate 1 — the race this
+        # test is about only surfaces at the validation step right after, which is
+        # exactly where eligibility_problem()'s re-check lives.
+        responses = iter(
+            [
+                {"selected_id": first_id},
+                {**VALID_GENERATION, "source_url": first_article.canonical_url},
+                {"selected_id": second_id},
+                {**VALID_GENERATION, "source_url": second_article.canonical_url},
+            ]
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            payload = next(responses)
+            if payload.get("selected_id") == first_id:
+                EvaluationRepository(connection).add(
+                    Evaluation(
+                        article_id=first_article.id, schema_version="1", rubric_version="1",
+                        evaluator_type=EvaluatorType.HUMAN, content_fingerprint="concurrent",
+                        decision=EditorialDecision.SHORTLIST, category=Category.PRODUCT_UPDATE,
+                        audience=AudienceTier.NEWCOMER,
+                        scores=dict(automation_pipeline._AUTOMATION_SCORES),
+                        composite_score=0.0, verification_status=VerificationStatus.NOT_REQUIRED,
+                    )
+                )
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [
+                        {"content": {"parts": [{"text": json.dumps(payload)}]},
+                         "finishReason": "STOP"}
+                    ]
+                },
+            )
+
+        telegram = fake_telegram_transport()
+        patch_clients(
+            monkeypatch, gemini_transport=httpx.MockTransport(handler),
+            telegram_transport=telegram,
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert PublicationRepository(connection).count() == 1
+
+    def test_three_candidates_all_rejected_returns_candidates_exhausted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path, max_candidate_attempts=3)
+        candidates, _by_id = automation_pipeline._eligible_candidates(connection)
+        assert len(candidates) == 3
+        ids = [c.id for c in candidates]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": ids[0]},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+            {"selected_id": ids[1]},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+            {"selected_id": ids[2]},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+        )
+        patch_clients(monkeypatch, gemini_transport=gemini, telegram_transport=None)
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert result.is_quiet
+        assert PublicationRepository(connection).count() == 0
+
+    def test_attempt_limit_of_two_never_tries_a_third_candidate(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path, max_candidate_attempts=2)
+        candidates, _by_id = automation_pipeline._eligible_candidates(connection)
+        assert len(candidates) == 3
+        ids = [c.id for c in candidates]
+
+        # Deliberately no third selection/generation pair: if the pipeline asks for a
+        # third, sequenced_gemini_transport's own assertion fails this test with a
+        # clear message rather than the limit silently not being enforced.
+        gemini = sequenced_gemini_transport(
+            {"selected_id": ids[0]},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+            {"selected_id": ids[1]},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+        )
+        patch_clients(monkeypatch, gemini_transport=gemini, telegram_transport=None)
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert len(gemini.calls) == 4  # type: ignore[attr-defined]
+
+    def test_the_same_candidate_cannot_be_selected_twice_in_one_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Structural guarantee, not just a convention: each round only offers
+        `remaining` — already excluding every previously-selected id — to Gemini, so
+        if it names an id from an earlier round anyway, select_candidate's own
+        not-in-the-offered-list check catches it exactly like a hallucinated id would."""
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        candidates, _by_id = automation_pipeline._eligible_candidates(connection)
+        first_id = candidates[0].id
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": first_id},
+            {"content_type": "NEWS", "rejection_reason": "no"},
+            {"selected_id": first_id},  # misbehaving: reoffers the already-used id
+        )
+        patch_clients(monkeypatch, gemini_transport=gemini, telegram_transport=None)
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.SELECTION_REJECTED
+        assert len(gemini.calls) == 3  # type: ignore[attr-defined]
+
+    def test_a_global_gemini_auth_error_aborts_the_whole_run_without_iterating(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The distinction section 5 exists to draw: this is not candidate-specific,
+        so it must not be multiplied by trying two more candidates to find the same
+        answer three times."""
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(
+                403, json={"error": {"code": 403, "message": "API key not valid."}}
+            )
+
+        patch_clients(
+            monkeypatch, gemini_transport=httpx.MockTransport(handler), telegram_transport=None,
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.GEMINI_ERROR
+        assert not result.is_quiet
+        assert len(calls) == 1
+        assert PublicationRepository(connection).count() == 0
+
+    def test_a_successful_first_candidate_means_no_second_attempt(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        first_id = candidates[0].id
+        first_article = by_id[first_id]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": first_id},
+            {**VALID_GENERATION, "source_url": first_article.canonical_url},
+        )
+        telegram = fake_telegram_transport()
+        patch_clients(monkeypatch, gemini_transport=gemini, telegram_transport=telegram)
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert len(gemini.calls) == 2  # type: ignore[attr-defined]
+        assert PublicationRepository(connection).count() == 1

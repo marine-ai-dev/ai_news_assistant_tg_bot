@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     #: ClassVars, so Pydantic treats them as plain class attributes, not model fields.
     DEFAULT_DAILY_POST_LIMIT: ClassVar[int] = 3
     DEFAULT_GEMINI_READ_TIMEOUT_SECONDS: ClassVar[float] = 90.0
+    DEFAULT_MAX_CANDIDATE_ATTEMPTS: ClassVar[int] = 3
 
     daily_post_limit: int = Field(
         default=DEFAULT_DAILY_POST_LIMIT,
@@ -175,6 +176,20 @@ class Settings(BaseSettings):
             "30s here; see automation/gemini.py."
         ),
     )
+    max_candidate_attempts: int = Field(
+        default=DEFAULT_MAX_CANDIDATE_ATTEMPTS,
+        ge=1,
+        description=(
+            "How many distinct NEWS candidates one automation run will try, in "
+            "sequence, before giving up for that run — not a retry count for a single "
+            "Gemini HTTP call (see gemini_read_timeout_seconds and the client's own "
+            "bounded transport retries for that), and not the daily publication cap "
+            "(see daily_post_limit). Exists because one candidate that fails for a "
+            "reason specific to it — a 403 fetching its article, an incomplete "
+            "generation, a validation rejection — should not by itself end a run that "
+            "still has other eligible candidates worth trying."
+        ),
+    )
 
     @field_validator(
         "telegram_bot_token", "telegram_channel", "telegram_owner_user_id", "test_channel",
@@ -195,7 +210,10 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("daily_post_limit", "gemini_read_timeout_seconds", mode="before")
+    @field_validator(
+        "daily_post_limit", "gemini_read_timeout_seconds", "max_candidate_attempts",
+        mode="before",
+    )
     @classmethod
     def _blank_means_the_default(cls, value: object, info: ValidationInfo) -> object:
         """Same problem as ``_blank_means_unset`` above, different fix: these fields are

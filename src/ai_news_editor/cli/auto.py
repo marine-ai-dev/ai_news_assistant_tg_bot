@@ -2,9 +2,15 @@
 
 One command runs the whole thing: collect, normalize, select, fetch, generate,
 validate, approve, publish — in that order, stopping at the first step that has nothing
-to do. There is no long-running process here and nothing to keep alive; a scheduled
-GitHub Actions run is one call to ``auto once`` and then the process exits, same as
-``ai-news collect`` or ``ai-news publish`` always have.
+to do. Select-fetch-generate-validate is itself a small bounded loop, not a single
+shot: a candidate rejected for a reason specific to it (a 403 fetching its article, an
+incomplete generation, a failed validation) is dropped and the next remaining eligible
+candidate is tried instead, up to ``AI_NEWS_MAX_CANDIDATE_ATTEMPTS`` (default 3) — see
+``automation.pipeline._attempt_candidates``. A genuine infrastructure failure (a bad
+key, an exhausted retry budget) still aborts the whole run immediately rather than
+being retried against more candidates. There is no long-running process here and
+nothing to keep alive; a scheduled GitHub Actions run is one call to ``auto once`` and
+then the process exits, same as ``ai-news collect`` or ``ai-news publish`` always have.
 
 Three modes, one function underneath (``automation.pipeline.run_pass``, which collects
 and normalizes before handing off to ``run_automation`` for selection onward):
@@ -122,6 +128,7 @@ _OUTCOME_STYLE = {
     Outcome.FULLTEXT_UNAVAILABLE: "yellow",
     Outcome.GENERATION_REJECTED: "yellow",
     Outcome.VALIDATION_FAILED: "red",
+    Outcome.CANDIDATES_EXHAUSTED: "yellow",
     Outcome.CONFIG_ERROR: "bold red",
     Outcome.GEMINI_ERROR: "bold red",
     Outcome.PUBLISH_ERROR: "bold red",

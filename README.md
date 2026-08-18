@@ -549,22 +549,32 @@ are untouched: nothing here selects, writes or approves either of them, ever.
 ```text
 collect (existing RSS/Atom/changelog sources)
   → normalize & deduplicate (existing pipeline)
-  → select one candidate           (Gemini, choosing only by id from a numbered list)
-  → fetch the full article text    (selectolax; too short or unreachable → stop, no guess)
-  → write the post                 (Gemini, grounded only in that fetched text)
-  → validate                       (the same DraftResult/Evaluation contract every draft uses)
-  → approve                        (the same approve_draft() gate a human approval calls,
-                                     actor recorded as "gemini:auto" — never a human's name)
-  → publish                        (the same prepare_publication/publish_bundle every
-                                     other publisher in this project uses)
+  → select a candidate              (Gemini, choosing only by id from a numbered list)
+  → fetch the full article text     (selectolax; too short or unreachable → try the
+                                      next candidate, no guessing from the summary)
+  → write the post                  (Gemini, grounded only in that fetched text)
+  → validate                        (the same DraftResult/Evaluation contract every
+                                      draft uses)
+  → approve                         (the same approve_draft() gate a human approval
+                                      calls, actor recorded as "gemini:auto" — never a
+                                      human's name)
+  → publish                         (the same prepare_publication/publish_bundle every
+                                      other publisher in this project uses)
 ```
 
-**Fail-closed, not best-guess.** A source with too little fetched text, a Gemini
-rejection, a low self-reported confidence, or a generated post whose URL doesn't match
-the article it was given — each of these stops the run quietly (exit 0, nothing
-written) rather than publishing something uncertain. Genuine infrastructure failures
-(a malformed API response, an exhausted retry budget) exit non-zero instead, so a
-scheduled workflow only turns red for something actually worth looking at.
+**Fail-closed, not best-guess — and bounded fallback, not one bad candidate ending the
+run.** A source with too little fetched text, a Gemini rejection, a low self-reported
+confidence, or a generated post whose URL doesn't match the article it was given — each
+of these drops that one candidate and tries the next remaining eligible one, up to
+`AI_NEWS_MAX_CANDIDATE_ATTEMPTS` (default 3) distinct candidates per run. Only once every
+attempt is exhausted does the run end quietly (`CANDIDATES_EXHAUSTED`, exit 0, nothing
+written). This exists because a real GitHub Actions run had Gemini pick an article that
+then 403'd on fetch, ending the entire run even though 14 other eligible candidates
+existed — see `automation.pipeline._attempt_candidates`. A genuine infrastructure
+failure (an invalid key, an exhausted transient-retry budget) is not candidate-specific,
+so it is never retried against more candidates — it aborts the whole run immediately and
+exits non-zero, so a scheduled workflow only turns red for something actually worth
+looking at.
 
 **Three modes, one code path (`run_pass`, in `automation/pipeline.py`):**
 

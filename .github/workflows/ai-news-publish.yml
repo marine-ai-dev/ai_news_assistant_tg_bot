@@ -119,9 +119,10 @@ jobs:
           # Blank when the repository Variable does not exist yet — Settings treats
           # that the same as never having set it (falls back to its own default),
           # not as a parse error. See Settings._blank_means_the_default, which covers
-          # both of these the same way.
+          # all three of these the same way.
           AI_NEWS_DAILY_POST_LIMIT: ${{ vars.AI_NEWS_DAILY_POST_LIMIT }}
           AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS: ${{ vars.AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS }}
+          AI_NEWS_MAX_CANDIDATE_ATTEMPTS: ${{ vars.AI_NEWS_MAX_CANDIDATE_ATTEMPTS }}
           AI_NEWS_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_NEWS_TELEGRAM_BOT_TOKEN }}
           AI_NEWS_TELEGRAM_CHANNEL: ${{ secrets.AI_NEWS_TELEGRAM_CHANNEL }}
           AI_NEWS_TEST_CHANNEL: ${{ secrets.AI_NEWS_TEST_CHANNEL }}
