@@ -61,7 +61,9 @@ class TestModeSelection:
     def test_workflow_dispatch_defaults_to_dry_run(self, workflow: dict[str, Any]) -> None:
         mode_input = workflow[True]["workflow_dispatch"]["inputs"]["mode"]
         assert mode_input["default"] == "dry-run"
-        assert set(mode_input["options"]) == {"dry-run", "test", "live", "telegram-doctor"}
+        assert set(mode_input["options"]) == {
+            "dry-run", "test", "live", "telegram-doctor", "telegram-doctor-live",
+        }
 
     def test_schedule_runs_monday_through_friday(self, workflow: dict[str, Any]) -> None:
         crons = [entry["cron"] for entry in workflow[True]["schedule"]]
@@ -156,7 +158,7 @@ class TestTelegramDoctorMode:
         self, workflow: dict[str, Any]
     ) -> None:
         step = _step(workflow, "Run automation")
-        assert step["if"] == "${{ steps.mode.outputs.mode != 'telegram-doctor' }}"
+        assert step["if"] == "${{ !contains(steps.mode.outputs.mode, 'telegram-doctor') }}"
 
     def test_state_is_never_persisted_in_telegram_doctor_mode(
         self, workflow: dict[str, Any]
@@ -166,6 +168,47 @@ class TestTelegramDoctorMode:
         condition = _step(workflow, "Persist automation state")["if"]
         assert "telegram-doctor" not in condition
         assert "== 'live'" in condition
+
+
+class TestTelegramDoctorLiveMode:
+    """The same read-only diagnostic, against the production channel — the pre-flight
+    check before AI_NEWS_AUTOMATION_ENABLED is ever set to true."""
+
+    def test_runs_telegram_doctor_without_the_test_flag(self, workflow: dict[str, Any]) -> None:
+        step = _step(workflow, "Telegram doctor (production channel)")
+        assert step["run"].strip() == "ai-news telegram doctor"
+
+    def test_only_runs_in_telegram_doctor_live_mode(self, workflow: dict[str, Any]) -> None:
+        step = _step(workflow, "Telegram doctor (production channel)")
+        assert step["if"] == "${{ steps.mode.outputs.mode == 'telegram-doctor-live' }}"
+
+    def test_never_receives_the_gemini_key_or_the_test_channel(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        env = _step(workflow, "Telegram doctor (production channel)")["env"]
+        assert set(env) == {"AI_NEWS_TELEGRAM_BOT_TOKEN", "AI_NEWS_TELEGRAM_CHANNEL"}
+
+    def test_run_automation_is_skipped_in_telegram_doctor_live_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        step = _step(workflow, "Run automation")
+        assert step["if"] == "${{ !contains(steps.mode.outputs.mode, 'telegram-doctor') }}"
+
+    def test_state_is_never_persisted_in_telegram_doctor_live_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        condition = _step(workflow, "Persist automation state")["if"]
+        assert "telegram-doctor" not in condition
+        assert "== 'live'" in condition
+
+    def test_the_schedule_trigger_cannot_produce_telegram_doctor_live_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        script = _step(workflow, "Resolve mode")["run"]
+        else_line = next(
+            i for i, line in enumerate(script.splitlines()) if line.strip() == "else"
+        )
+        assert 'mode="live"' in script.splitlines()[else_line + 1]
 
 
 class TestKillSwitchWiring:

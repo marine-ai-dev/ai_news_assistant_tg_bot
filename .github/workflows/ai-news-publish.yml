@@ -26,8 +26,10 @@ on:
           live: full pipeline, sent to AI_NEWS_TELEGRAM_CHANNEL.
           telegram-doctor: read-only check of AI_NEWS_TEST_CHANNEL reachability —
           getMe/getChat/getChatMember only, sends nothing, runs no automation.
+          telegram-doctor-live: the same read-only check, against
+          AI_NEWS_TELEGRAM_CHANNEL (production) instead. Sends nothing.
         type: choice
-        options: [dry-run, test, live, telegram-doctor]
+        options: [dry-run, test, live, telegram-doctor, telegram-doctor-live]
         default: dry-run
   schedule:
     # 08:00 UTC, Mon–Fri. GitHub Actions cron has no timezone concept, so this drifts
@@ -72,10 +74,11 @@ jobs:
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
 
           case "$mode" in
-            dry-run)         echo "flag=--dry-run" >> "$GITHUB_OUTPUT" ;;
-            test)            echo "flag=--test" >> "$GITHUB_OUTPUT" ;;
-            live)            echo "flag=" >> "$GITHUB_OUTPUT" ;;
-            telegram-doctor) echo "flag=" >> "$GITHUB_OUTPUT" ;;  # unused in this mode
+            dry-run)              echo "flag=--dry-run" >> "$GITHUB_OUTPUT" ;;
+            test)                 echo "flag=--test" >> "$GITHUB_OUTPUT" ;;
+            live)                 echo "flag=" >> "$GITHUB_OUTPUT" ;;
+            telegram-doctor)      echo "flag=" >> "$GITHUB_OUTPUT" ;;  # unused in this mode
+            telegram-doctor-live) echo "flag=" >> "$GITHUB_OUTPUT" ;;  # unused in this mode
             *) echo "::error::Unknown mode '$mode'"; exit 1 ;;
           esac
 
@@ -119,13 +122,23 @@ jobs:
           AI_NEWS_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_NEWS_TELEGRAM_BOT_TOKEN }}
           AI_NEWS_TEST_CHANNEL: ${{ secrets.AI_NEWS_TEST_CHANNEL }}
 
+      - name: Telegram doctor (production channel)
+        # Same read-only check as above, against AI_NEWS_TELEGRAM_CHANNEL instead —
+        # the pre-flight check before ever setting AI_NEWS_AUTOMATION_ENABLED=true.
+        # No Gemini key here either: this step sends nothing and runs no automation.
+        if: ${{ steps.mode.outputs.mode == 'telegram-doctor-live' }}
+        run: ai-news telegram doctor
+        env:
+          AI_NEWS_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_NEWS_TELEGRAM_BOT_TOKEN }}
+          AI_NEWS_TELEGRAM_CHANNEL: ${{ secrets.AI_NEWS_TELEGRAM_CHANNEL }}
+
       - name: Run automation
         id: run
         # Exit 0 covers every normal outcome, including "nothing to publish today" and
         # "the kill switch is off" — a red run here means a genuine infrastructure
-        # failure, not a quiet day. Skipped entirely for telegram-doctor, which is a
-        # pure diagnostic and never touches collection, Gemini, or approval.
-        if: ${{ steps.mode.outputs.mode != 'telegram-doctor' }}
+        # failure, not a quiet day. Skipped entirely for either telegram-doctor mode,
+        # which is a pure diagnostic and never touches collection, Gemini, or approval.
+        if: ${{ !contains(steps.mode.outputs.mode, 'telegram-doctor') }}
         run: ai-news auto once ${{ steps.mode.outputs.flag }}
         env:
           AI_NEWS_AUTOMATION_ENABLED: ${{ vars.AI_NEWS_AUTOMATION_ENABLED }}
