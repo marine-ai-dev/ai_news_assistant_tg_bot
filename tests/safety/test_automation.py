@@ -256,6 +256,8 @@ sources:
     url: {feed_url}
     trust_tier: OFFICIAL
     editorial_role: Primary official source for end-to-end tests.
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS]
 """,
         encoding="utf-8",
     )

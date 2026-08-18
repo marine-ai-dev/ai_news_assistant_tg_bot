@@ -28,6 +28,8 @@ TWO_SOURCES = {
             "url": "https://alpha.invalid/rss.xml",
             "trust_tier": "OFFICIAL",
             "editorial_role": "Primary test source.",
+            "priority": "PRIMARY_NORMAL",
+            "content_types": ["NEWS"],
         },
         {
             "id": "beta",
@@ -36,6 +38,8 @@ TWO_SOURCES = {
             "url": "https://beta.invalid/atom.xml",
             "trust_tier": "REPUTABLE_SECONDARY",
             "editorial_role": "Secondary test source.",
+            "priority": "DISCOVERY",
+            "content_types": ["NEWS"],
         },
     ],
 }
@@ -356,7 +360,14 @@ class TestSourceSelection:
     def test_disabled_sources_are_skipped_by_default(self, connection: sqlite3.Connection) -> None:
         data = {
             **TWO_SOURCES,
-            "sources": [TWO_SOURCES["sources"][0], {**TWO_SOURCES["sources"][1], "enabled": False}],
+            "sources": [
+                TWO_SOURCES["sources"][0],
+                {
+                    **TWO_SOURCES["sources"][1],
+                    "enabled": False,
+                    "disabled_reason": "Disabled for this test.",
+                },
+            ],
         }
         report = run(
             connection,
@@ -371,7 +382,14 @@ class TestSourceSelection:
         """An explicit request by id is a clearer signal of intent than the config default."""
         data = {
             **TWO_SOURCES,
-            "sources": [TWO_SOURCES["sources"][0], {**TWO_SOURCES["sources"][1], "enabled": False}],
+            "sources": [
+                TWO_SOURCES["sources"][0],
+                {
+                    **TWO_SOURCES["sources"][1],
+                    "enabled": False,
+                    "disabled_reason": "Disabled for this test.",
+                },
+            ],
         }
         report = run(
             connection,

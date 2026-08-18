@@ -36,6 +36,74 @@ class TrustTier(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+class ContentCapability(StrEnum):
+    """What a source's items may eventually feed into, editorially.
+
+    Source registry metadata for a future content classifier — a source listing
+    ``PROMPT_WORKFLOW`` does not mean anything extracts prompts from it today. The
+    live automation pipeline is NEWS-only and reads none of this; it exists so a later
+    phase does not have to re-derive "what is this source good for" from scratch.
+    """
+
+    NEWS = "NEWS"
+    AI_TOOL = "AI_TOOL"
+    FREE_DEAL = "FREE_DEAL"
+    AI_LIFEHACK = "AI_LIFEHACK"
+    PROMPT_WORKFLOW = "PROMPT_WORKFLOW"
+    EXPLAINER = "EXPLAINER"
+    RESEARCH = "RESEARCH"
+    WEEKLY_DIGEST_INPUT = "WEEKLY_DIGEST_INPUT"
+
+
+class MediaPolicy(StrEnum):
+    """How conservatively a source's media may be used, once media handling exists.
+
+    Never inferred from "it's on an official page" — reuse permission has to be
+    explicit and traceable, not assumed. Registry metadata only: nothing downloads,
+    compresses or reuploads media yet.
+    """
+
+    #: Default. No image/video from this source is used in any form.
+    NO_MEDIA = "NO_MEDIA"
+    #: Telegram's own link-preview card may show the source's page image. Nothing is
+    #: downloaded or re-hosted by this application.
+    LINK_PREVIEW_ONLY = "LINK_PREVIEW_ONLY"
+    #: A future phase may look for media on this source's pages, but reuse permission
+    #: is still unresolved — discovery only, not a green light to republish.
+    DISCOVER_MEDIA = "DISCOVER_MEDIA"
+    #: The source has stated, checkable licensing/reuse terms this application can
+    #: point to. Not the default for any source added in this step.
+    EXPLICIT_REUSE_ALLOWED = "EXPLICIT_REUSE_ALLOWED"
+
+
+class SourcePriority(StrEnum):
+    """Coarse ranking metadata for a future editorial diversity/ranking pass.
+
+    Deliberately coarse — not a numeric score. ``TrustTier`` says how much a claim can
+    be trusted; this says how much weight a source should carry when choosing among
+    several eligible stories, which is a different question the current automation
+    pipeline does not yet ask.
+    """
+
+    PRIMARY_HIGH = "PRIMARY_HIGH"
+    PRIMARY_NORMAL = "PRIMARY_NORMAL"
+    DISCOVERY = "DISCOVERY"
+    COMMUNITY = "COMMUNITY"
+
+
+class FulltextPolicy(StrEnum):
+    """Whether a source's items are expected to need or support a fulltext fetch.
+
+    ``DISCOVERY_ONLY`` sources (community signal sources today) never reach
+    ``sources.fulltext.fetch_fulltext`` at all — process.py routes their items to a
+    ``CommunitySignal`` instead of normalizing them into articles. This field records
+    that fact as registry metadata rather than leaving it implicit in ``signal_only``.
+    """
+
+    NORMAL_ATTEMPT = "NORMAL_ATTEMPT"
+    DISCOVERY_ONLY = "DISCOVERY_ONLY"
+
+
 class FetchOutcome(StrEnum):
     """Result of one attempt to read a source.
 
