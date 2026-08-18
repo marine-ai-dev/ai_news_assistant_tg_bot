@@ -61,7 +61,7 @@ class TestModeSelection:
     def test_workflow_dispatch_defaults_to_dry_run(self, workflow: dict[str, Any]) -> None:
         mode_input = workflow[True]["workflow_dispatch"]["inputs"]["mode"]
         assert mode_input["default"] == "dry-run"
-        assert set(mode_input["options"]) == {"dry-run", "test", "live"}
+        assert set(mode_input["options"]) == {"dry-run", "test", "live", "telegram-doctor"}
 
     def test_schedule_runs_monday_through_friday(self, workflow: dict[str, Any]) -> None:
         crons = [entry["cron"] for entry in workflow[True]["schedule"]]
@@ -117,6 +117,55 @@ class TestModeSelection:
             "expected exactly one guarded reference to inputs.mode; "
             f"found {len(occurrences)}"
         )
+
+    def test_the_schedule_trigger_cannot_produce_telegram_doctor_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """The scheduled branch hard-codes mode="live" as a string literal — there is
+        no code path from a schedule trigger to any other mode, telegram-doctor
+        included, matching the two tests above."""
+        script = _step(workflow, "Resolve mode")["run"]
+        else_line = next(
+            i for i, line in enumerate(script.splitlines()) if line.strip() == "else"
+        )
+        assert 'mode="live"' in script.splitlines()[else_line + 1]
+
+
+class TestTelegramDoctorMode:
+    """A cheap, read-only diagnostic mode — verifies AI_NEWS_TEST_CHANNEL reachability
+    without the cost (or the Gemini/collection side effects) of a full mode=test run."""
+
+    def test_runs_telegram_doctor_with_the_test_flag(self, workflow: dict[str, Any]) -> None:
+        step = _step(workflow, "Telegram doctor (test channel)")
+        assert step["run"].strip() == "ai-news telegram doctor --test"
+
+    def test_only_runs_in_telegram_doctor_mode(self, workflow: dict[str, Any]) -> None:
+        step = _step(workflow, "Telegram doctor (test channel)")
+        assert step["if"] == "${{ steps.mode.outputs.mode == 'telegram-doctor' }}"
+
+    def test_never_receives_the_gemini_key_or_the_production_channel(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """A pure Telegram-reachability check has no business seeing either — keeping
+        them out of this step's env is itself part of the guarantee that this mode can
+        never touch production or spend a Gemini call."""
+        env = _step(workflow, "Telegram doctor (test channel)")["env"]
+        assert set(env) == {"AI_NEWS_TELEGRAM_BOT_TOKEN", "AI_NEWS_TEST_CHANNEL"}
+
+    def test_run_automation_is_skipped_in_telegram_doctor_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        step = _step(workflow, "Run automation")
+        assert step["if"] == "${{ steps.mode.outputs.mode != 'telegram-doctor' }}"
+
+    def test_state_is_never_persisted_in_telegram_doctor_mode(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """Already implied by the persist step requiring mode == 'live', but explicit
+        here since this mode is new."""
+        condition = _step(workflow, "Persist automation state")["if"]
+        assert "telegram-doctor" not in condition
+        assert "== 'live'" in condition
 
 
 class TestKillSwitchWiring:

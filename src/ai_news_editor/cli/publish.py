@@ -53,13 +53,21 @@ def _settings() -> Settings:
         raise typer.Exit(code=2) from exc
 
 
-def _require_telegram(settings: Settings) -> tuple[str, str]:
-    """Token and channel, or a clear explanation of what is missing."""
+def _require_telegram(settings: Settings, *, test: bool = False) -> tuple[str, str]:
+    """Token and channel, or a clear explanation of what is missing.
+
+    ``test=True`` checks ``AI_NEWS_TEST_CHANNEL`` instead of the production
+    ``AI_NEWS_TELEGRAM_CHANNEL`` — the two are unrelated destinations with unrelated
+    bot-membership state, so verifying one proves nothing about the other.
+    """
+    channel_setting_name = "AI_NEWS_TEST_CHANNEL" if test else "AI_NEWS_TELEGRAM_CHANNEL"
+    channel = settings.test_channel if test else settings.telegram_channel
+
     missing = []
     if settings.telegram_bot_token is None:
         missing.append("AI_NEWS_TELEGRAM_BOT_TOKEN")
-    if not settings.telegram_channel:
-        missing.append("AI_NEWS_TELEGRAM_CHANNEL")
+    if not channel:
+        missing.append(channel_setting_name)
     if missing:
         err_console.print(
             f"[bold red]Not configured:[/bold red] {', '.join(missing)} is not set.\n"
@@ -67,8 +75,8 @@ def _require_telegram(settings: Settings) -> tuple[str, str]:
             "with 'Post Messages', then put both values in .env. See the README."
         )
         raise typer.Exit(code=2)
-    assert settings.telegram_bot_token is not None and settings.telegram_channel is not None
-    return settings.telegram_bot_token.get_secret_value(), settings.telegram_channel
+    assert settings.telegram_bot_token is not None and channel is not None
+    return settings.telegram_bot_token.get_secret_value(), channel
 
 
 def _parse_uuid(value: str) -> UUID:
@@ -85,7 +93,15 @@ def _parse_uuid(value: str) -> UUID:
 
 
 @telegram_app.command("doctor")
-def telegram_doctor() -> None:
+def telegram_doctor(
+    test: Annotated[
+        bool,
+        typer.Option(
+            "--test",
+            help="Check AI_NEWS_TEST_CHANNEL instead of the production channel.",
+        ),
+    ] = False,
+) -> None:
     """Check the Telegram setup without sending anything.
 
     Read-only by construction: it calls getMe, getChat and getChatMember and nothing
@@ -95,7 +111,7 @@ def telegram_doctor() -> None:
     Where the API cannot answer a question, it says so rather than reporting success.
     """
     settings = _settings()
-    token, channel = _require_telegram(settings)
+    token, channel = _require_telegram(settings, test=test)
 
     table = Table(title="Telegram check")
     table.add_column("Check")
