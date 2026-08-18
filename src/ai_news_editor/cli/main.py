@@ -24,6 +24,7 @@ from ai_news_editor.cli.editorial import app as editorial_app
 from ai_news_editor.cli.publish import publication_app, publish, telegram_app
 from ai_news_editor.cli.queue import queue_app, scheduler_app
 from ai_news_editor.cli.review import app as review_app
+from ai_news_editor.cli.sources import sources_app
 from ai_news_editor.domain.enums import FetchOutcome
 from ai_news_editor.domain.errors import AiNewsError
 from ai_news_editor.health import all_ok, run_health_checks
@@ -58,6 +59,7 @@ app.add_typer(calendar_app)
 app.add_typer(queue_app)
 app.add_typer(scheduler_app)
 app.add_typer(telegram_app)
+app.add_typer(sources_app)
 # A plain command, not a group: "publish" takes one draft id and nothing else, and a
 # Typer group would treat that id as a subcommand name.
 app.command("publish")(publish)
@@ -201,32 +203,6 @@ def db_status() -> None:
         console.print(counts)
     finally:
         connection.close()
-
-
-@app.command()
-def sources() -> None:
-    """List configured sources and their last fetch outcome."""
-    settings = _load_settings()
-    config = _load_sources_config(settings)
-
-    table = Table(title="Configured sources", show_lines=True)
-    table.add_column("Source", no_wrap=True)
-    table.add_column("Kind / trust", no_wrap=True)
-    table.add_column("Editorial role", ratio=1)
-
-    for definition in config.sources:
-        marker = "" if definition.enabled else " [dim](disabled)[/dim]"
-        trust = definition.trust_tier.value.replace("_", " ").lower()
-        table.add_row(
-            f"{definition.id}{marker}",
-            f"{definition.adapter.value.lower()}\n[dim]{trust}[/dim]",
-            " ".join(definition.editorial_role.split()),
-        )
-    console.print(table)
-    console.print(
-        "[dim]Trust tier is provenance metadata, not a verdict on truth: it records where a "
-        "claim came from. Community signals never establish that a claim is true.[/dim]"
-    )
 
 
 @app.command()
