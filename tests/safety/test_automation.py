@@ -1630,9 +1630,12 @@ class TestCandidateFallback:
     def test_candidate_1_fulltext_403_falls_back_to_candidate_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Two different domains — a 403 on one must not stop the other from being
+        tried. Same-domain fallback after a 403 is covered separately, under
+        TestDomainCooldown, where it is expected *not* to fall through."""
         connection = db(tmp_path)
-        seed_official_article(connection)
-        seed_official_article(connection)
+        seed_official_article(connection, url="https://openai.com/index/a")
+        seed_official_article(connection, url="https://blog.google/b")
         settings = build_settings(tmp_path)
         candidates, by_id = automation_pipeline._eligible_candidates(connection)
         first_id, second_id = candidates[0].id, candidates[1].id
@@ -2074,3 +2077,150 @@ class TestTestOnlyDedup:
         result = run_automation(connection, settings, mode="live")
         assert result.outcome is Outcome.PUBLISHED, result.detail
         assert result.channel == settings.telegram_channel
+
+
+class TestDomainCooldown:
+    """A fulltext failure that means 'the fetcher is unwelcome on this domain right
+    now' (401/403, or a 429 that survived HttpClient's own retries) excludes every
+    remaining candidate on that domain for the rest of this run — see
+    automation.pipeline._DOMAIN_UNAVAILABLE_STATUS and _domain_of. Never persisted:
+    the next independent call starts with a clean slate."""
+
+    def test_a_blocked_domain_is_excluded_from_the_rest_of_the_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection, url="https://openai.com/index/a")
+        seed_official_article(connection, url="https://openai.com/index/b")
+        seed_official_article(connection, url="https://blog.google/c")
+        settings = build_settings(tmp_path)
+
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        by_url = {c.url: c for c in candidates}
+        a_id = by_url["https://openai.com/index/a"].id
+        c_id = by_url["https://blog.google/c"].id
+        c_article = by_id[c_id]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": a_id},
+            {"selected_id": c_id},
+            {**VALID_GENERATION, "source_url": c_article.canonical_url},
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=gemini, telegram_transport=fake_telegram_transport(),
+            fulltext_transport=routed_fulltext_transport(
+                {"https://openai.com/index/a": (403, None)}
+            ),
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert result.channel == settings.telegram_channel
+        # Only two Gemini selection calls were needed (plus one generation) — candidate
+        # B was never even offered, let alone attempted, once openai.com was blocked.
+        assert len(gemini.calls) == 3  # type: ignore[attr-defined]
+        second_selection_prompt = json.dumps(gemini.calls[1])  # type: ignore[attr-defined]
+        b_id = by_url["https://openai.com/index/b"].id
+        assert f"id: {b_id}\\n" not in second_selection_prompt
+        assert f"id: {c_id}\\n" in second_selection_prompt
+
+    def test_a_404_rejects_only_that_candidate_not_the_whole_domain(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        seed_official_article(connection, url="https://openai.com/index/a")
+        seed_official_article(connection, url="https://openai.com/index/b")
+        settings = build_settings(tmp_path)
+
+        candidates, by_id = automation_pipeline._eligible_candidates(connection)
+        by_url = {c.url: c for c in candidates}
+        a_id = by_url["https://openai.com/index/a"].id
+        b_id = by_url["https://openai.com/index/b"].id
+        b_article = by_id[b_id]
+
+        gemini = sequenced_gemini_transport(
+            {"selected_id": a_id},
+            {"selected_id": b_id},
+            {**VALID_GENERATION, "source_url": b_article.canonical_url},
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=gemini, telegram_transport=fake_telegram_transport(),
+            fulltext_transport=routed_fulltext_transport(
+                {"https://openai.com/index/a": (404, None)}
+            ),
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        # A 404 is a content-specific failure — B, on the exact same domain, is still
+        # offered and still succeeds.
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        second_selection_prompt = json.dumps(gemini.calls[1])  # type: ignore[attr-defined]
+        assert f"id: {b_id}\\n" in second_selection_prompt
+
+    def test_the_blocked_domain_set_does_not_survive_between_runs(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Run #1 blocks openai.com. An independent run #2 (a fresh call, exactly what
+        a new scheduled dispatch is) must offer it again — nothing here is persisted."""
+        connection = db(tmp_path)
+        seed_official_article(connection, url="https://openai.com/index/a")
+        settings = build_settings(tmp_path)
+        candidates, _by_id = automation_pipeline._eligible_candidates(connection)
+        a_id = candidates[0].id
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=sequenced_gemini_transport({"selected_id": a_id}),
+            telegram_transport=fake_telegram_transport(),
+            fulltext_transport=routed_fulltext_transport(
+                {"https://openai.com/index/a": (403, None)}
+            ),
+        )
+        run_1 = run_automation(connection, settings, mode="live")
+        assert run_1.outcome is Outcome.CANDIDATES_EXHAUSTED
+
+        # Run #2: a genuinely independent call. The same article is still eligible in
+        # this same database (nothing was drafted for it — the 403 never got that
+        # far), and this time fulltext succeeds.
+        gemini_2 = sequenced_gemini_transport(
+            {"selected_id": a_id},
+            {**VALID_GENERATION, "source_url": "https://openai.com/index/a"},
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=gemini_2, telegram_transport=fake_telegram_transport(),
+            fulltext_transport=routed_fulltext_transport({}),
+        )
+        run_2 = run_automation(connection, settings, mode="live")
+        assert run_2.outcome is Outcome.PUBLISHED, run_2.detail
+
+    def test_gemini_api_429_is_a_global_failure_not_a_domain_rejection(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 429 from the Gemini API itself is a wholly different client than the
+        fulltext fetcher — it must abort the whole run (GEMINI_ERROR), never be
+        mistaken for a source website throttling us."""
+        connection = db(tmp_path)
+        seed_official_article(connection, url="https://openai.com/index/a")
+        seed_official_article(connection, url="https://openai.com/index/b")
+        seed_official_article(connection, url="https://blog.google/c")
+        settings = build_settings(tmp_path)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                429,
+                json={"error": {"code": 429, "status": "RESOURCE_EXHAUSTED",
+                                 "message": "Quota exceeded."}},
+            )
+
+        patch_clients(
+            monkeypatch, gemini_transport=httpx.MockTransport(handler),
+            telegram_transport=fake_telegram_transport(),
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.GEMINI_ERROR
+        assert not result.is_quiet
+        assert PublicationRepository(connection).count() == 0

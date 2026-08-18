@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from typing import Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from ai_news_editor.automation import test_history
@@ -106,6 +107,21 @@ Mode = Literal["dry-run", "test", "live"]
 #: How many candidates are looked at before giving up and calling it a quiet run. Small
 #: and deterministic, matching the selection prompt's own bound.
 CANDIDATE_LIMIT = MAX_SELECTION_CANDIDATES
+
+#: A fulltext failure at one of these statuses means the *fetcher* is unwelcome on that
+#: domain right now, not that this one page is bad — a 403/401 on one OpenAI article is
+#: not going to look different on the next one. 429 is included too, but only ever seen
+#: here after HttpClient's own transient-retry budget (sources.http.DEFAULT_MAX_ATTEMPTS)
+#: is already exhausted, which is what turns "a blip" into "sustained throttling" — not
+#: to be confused with a 429 from the Gemini API, which is a wholly separate client and
+#: stays a global GEMINI_ERROR exactly as before (see _run_pipeline's own except clause).
+_DOMAIN_UNAVAILABLE_STATUS = frozenset({401, 403, 429})
+
+
+def _domain_of(url: str) -> str:
+    """The candidate's hostname, normalized just enough that a ``www.`` subdomain and
+    its bare domain cool down together — nothing broader than that one prefix."""
+    return (urlsplit(url).hostname or "").removeprefix("www.").lower()
 
 #: Automation's own fixed classification for the Evaluation it creates. Not something
 #: Gemini is asked for (see automation.schema's module docstring for why the schema
@@ -530,21 +546,44 @@ def _attempt_candidates(
     propagate to the caller, whose own ``except GeminiError`` turns it into the loud
     ``GEMINI_ERROR`` outcome. That is what stops a global infrastructure failure from
     being silently retried against two more candidates instead of surfacing at all.
+
+    A fulltext failure that looks like the *fetcher* being unwelcome on a domain
+    (401/403, or a 429 that survived HttpClient's own transient retries) cools that
+    hostname down for the rest of this call only — see ``blocked_domains`` below and
+    ``_DOMAIN_UNAVAILABLE_STATUS``. Three OpenAI articles in a row used to be able to
+    exhaust the whole attempt budget on the same blocked domain; now the second attempt
+    already excludes every remaining OpenAI candidate instead of rediscovering the same
+    403 twice. A 404, a too-short article, a duplicate, or a rejected generation stays
+    exactly what it was: one candidate rejected, its domain untouched.
     """
     remaining = list(candidates)
+    #: Hostnames the fetcher could not reach this run (401/403, or sustained 429 — see
+    #: _DOMAIN_UNAVAILABLE_STATUS). Local to this one call: never written anywhere, and
+    #: gone the moment this function returns, so the next run — scheduled or manual —
+    #: gets a clean slate and may try the same domain again.
+    blocked_domains: set[str] = set()
     attempted: list[str] = []
 
-    def _reject(attempt: int, stage: str, candidate: SelectionCandidate, reason: str) -> None:
+    def _reject(
+        attempt: int, stage: str, candidate: SelectionCandidate, reason: str,
+        *, domain: str | None = None, http_status: int | None = None,
+    ) -> None:
         attempted.append(f"{candidate.source_name} ({candidate.url}): {stage} — {reason}")
-        logger.info(
-            "candidate rejected",
-            extra={
-                "attempt": attempt, "stage": stage,
-                "source": candidate.source_name, "reason": reason,
-            },
-        )
+        extra: dict[str, object] = {
+            "attempt": attempt, "stage": stage,
+            "source": candidate.source_name, "reason": reason,
+        }
+        if domain is not None:
+            extra["domain"] = domain
+        if http_status is not None:
+            extra["http_status"] = http_status
+        logger.info("candidate rejected", extra=extra)
 
     for attempt in range(1, max_attempts + 1):
+        # Domains that failed with a fetcher-unavailable status on an earlier attempt
+        # this run are never offered again — see the fulltext branch below for where
+        # blocked_domains is populated.
+        remaining = [c for c in remaining if _domain_of(c.url) not in blocked_domains]
         if not remaining:
             break
 
@@ -567,7 +606,17 @@ def _attempt_candidates(
 
         fulltext = fetch_fulltext(candidate.url)
         if not fulltext.ok:
-            _reject(attempt, "fulltext", candidate, fulltext.reason or "unavailable")
+            domain = _domain_of(candidate.url)
+            _reject(
+                attempt, "fulltext", candidate, fulltext.reason or "unavailable",
+                domain=domain, http_status=fulltext.status_code,
+            )
+            if fulltext.status_code in _DOMAIN_UNAVAILABLE_STATUS and domain not in blocked_domains:
+                blocked_domains.add(domain)
+                logger.info(
+                    "domain unavailable for run",
+                    extra={"domain": domain, "http_status": fulltext.status_code},
+                )
             continue
 
         try:

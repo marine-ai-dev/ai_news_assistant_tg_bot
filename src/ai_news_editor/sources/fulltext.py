@@ -35,7 +35,7 @@ from selectolax.parser import HTMLParser
 
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.pipeline.text import clean_text
-from ai_news_editor.sources.http import HttpClient, HttpError, UnsafeUrlError
+from ai_news_editor.sources.http import HttpClient, HttpError, HttpStatusError, UnsafeUrlError
 
 logger = get_logger(__name__)
 
@@ -79,6 +79,13 @@ class FullTextResult:
     text: str | None = None
     #: Present exactly when ``ok`` is False — why this candidate cannot be used.
     reason: str | None = None
+    #: The response status, when the failure was one — after HttpClient's own transient
+    #: retries are exhausted, so a 429 here means sustained throttling, not a blip.
+    #: ``None`` for every non-HTTP failure (timeout, transport, unsafe URL, bad markup).
+    #: Automation uses this to tell "this one page is unavailable" apart from "this
+    #: whole domain is currently unavailable to this fetcher" — see
+    #: automation.pipeline's domain-cooldown logic.
+    status_code: int | None = None
 
     def __post_init__(self) -> None:
         if self.ok and not self.text:  # pragma: no cover - defensive
@@ -108,7 +115,10 @@ def fetch_fulltext(url: str, *, http: HttpClient | None = None) -> FullTextResul
     except UnsafeUrlError as exc:
         return FullTextResult(url=url, ok=False, reason=f"unsafe URL: {exc}")
     except HttpError as exc:
-        return FullTextResult(url=url, ok=False, reason=f"fetch failed: {exc}")
+        status = exc.status_code if isinstance(exc, HttpStatusError) else None
+        return FullTextResult(
+            url=url, ok=False, reason=f"fetch failed: {exc}", status_code=status
+        )
     finally:
         if owns_client:
             client.close()
