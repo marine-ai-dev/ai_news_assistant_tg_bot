@@ -232,10 +232,12 @@ def fetch_states(connection: sqlite3.Connection) -> SourceFetchStateRepository:
 
 DRAFT_CONTENT: dict[str, object] = {
     "title": "Placeholder draft",
-    "body": "Placeholder body text.",
+    "body": "Placeholder body text for the test suite.",
     "category": Category.PRODUCT_UPDATE,
     "audience": AudienceTier.BEGINNER,
-    "source_attribution": "Example — https://example.invalid/item",
+    # The real format source_line() produces ("🔗 Джерело: <label>\n<url>"), so
+    # source_label_of() parses a label back out of it the same way production code does.
+    "source_attribution": "🔗 Джерело: Example\nhttps://example.invalid/item",
     "created_by": "test",
 }
 

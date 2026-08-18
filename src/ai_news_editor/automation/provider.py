@@ -94,9 +94,11 @@ to 100, that every sentence in your post is directly supported by the article te
 be honest and conservative; do not report a high number to make the post more likely to
 be used.
 
-Style: a short headline; one to three short paragraphs; plain Ukrainian; no markup
-beyond plain text and line breaks. The headline must not exceed
-{max_headline} characters.
+Style: a short headline; one to three short paragraphs, each separated by a single
+blank line (two newlines); plain Ukrainian; no markup of any kind — no bold, no
+Markdown, no HTML tags, nothing but plain text and the blank lines between paragraphs.
+Formatting (bold, emoji, links) is decided entirely by this application when it renders
+your post, never by you. The headline must not exceed {max_headline} characters.
 
 Respond only with JSON matching the given schema.
 """.replace("{max_headline}", str(MAX_HEADLINE_CHARS))

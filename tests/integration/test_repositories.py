@@ -236,7 +236,9 @@ class TestDraftRepository:
 
         versions = drafts.list_versions(draft.id)
         assert [v.version_no for v in versions] == [1, 2, 3]
-        assert [v.body for v in versions] == ["Placeholder body text.", "Second", "Third"]
+        assert [v.body for v in versions] == [
+            "Placeholder body text for the test suite.", "Second", "Third",
+        ]
 
     def test_current_version_follows_the_newest(
         self, seeded_article: Article, drafts: DraftRepository

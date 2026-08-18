@@ -29,7 +29,12 @@ BODY = (
 )
 
 
-def version(title: str = "🆕 Застосунок отримав нову функцію", body: str = BODY) -> DraftVersion:
+def version(
+    title: str = "🆕 Застосунок отримав нову функцію",
+    body: str = BODY,
+    source_url: str | None = "https://alpha.invalid/story",
+    source_attribution: str = "🔗 Джерело: Alpha Co\nhttps://alpha.invalid/story",
+) -> DraftVersion:
     from uuid import uuid4
 
     return DraftVersion(
@@ -39,8 +44,8 @@ def version(title: str = "🆕 Застосунок отримав нову фу
         body=body,
         category=Category.PRODUCT_UPDATE,
         audience=AudienceTier.GENERAL,
-        source_attribution="🔗 Джерело: Alpha Co\nhttps://alpha.invalid/story",
-        source_url="https://alpha.invalid/story",
+        source_attribution=source_attribution,
+        source_url=source_url,
         created_by="test",
     )
 
@@ -117,8 +122,16 @@ class TestEscaping:
 
 class TestPayload:
     def test_a_plain_post_is_sent_without_a_parse_mode(self) -> None:
-        """No parse mode means nothing can be misparsed. The normal case."""
-        message = build_message(version())
+        """No parse mode means nothing can be misparsed.
+
+        A NEWS post always carries a source and is therefore always rendered with the
+        channel's rich HTML style (see TestNewsStyle below) — the case that stays plain
+        is editorial-original content, which has no source to attribute and no markup
+        of its own.
+        """
+        message = build_message(
+            version(source_url=None, source_attribution="Матеріал каналу")
+        )
         assert message.parse_mode is None
         assert message.payload_text == message.approved_text
         assert "parse_mode" not in message.to_payload("@c")
@@ -168,11 +181,13 @@ class TestContentExactness:
     def test_nothing_is_reordered_or_reworded(self) -> None:
         subject = version()
         text = build_message(subject).approved_text
-        assert text.index(subject.title) < text.index(subject.body) < text.index("🔗 Джерело")
+        assert text.index(subject.title) < text.index(subject.body) < text.index("Джерело")
 
     def test_the_emoji_in_the_headline_is_not_changed(self) -> None:
+        """The renderer prepends its own deterministic emoji, but a writer's own
+        leading emoji in the title itself is still carried through unmodified."""
         subject = version(title="🤖 Заголовок з емодзі")
-        assert build_message(subject).approved_text.startswith("🤖 Заголовок з емодзі")
+        assert subject.title in build_message(subject).approved_text
 
 
 class TestUnknownTags:
@@ -196,3 +211,56 @@ class TestUnknownTags:
     def test_unescaping_ignores_tags_it_would_never_have_written(self) -> None:
         """escape_html never emits a raw <div>, so unescape treats one as plain text."""
         assert unescape_html("<div>&amp;</div>") == "<div>&</div>"
+
+
+class TestNewsStylePayload:
+    """The full pipeline for a NEWS post: render_version's HTML skeleton, then
+    build_message's escaping, end to end — the exact path a real automation post
+    takes on its way to Telegram."""
+
+    def test_the_final_payload_is_html_with_a_bold_headline(self) -> None:
+        message = build_message(version())
+        assert message.parse_mode == "HTML"
+        assert message.payload_text.startswith("<b>")
+        assert "</b>" in message.payload_text
+
+    def test_paragraphs_stay_blank_line_separated_in_the_payload(self) -> None:
+        body = "Перший абзац.\n\nДругий абзац."
+        message = build_message(version(body=body))
+        assert "\n\n" in message.payload_text
+
+    def test_the_source_link_survives_and_no_bare_url_line_appears(self) -> None:
+        message = build_message(version())
+        assert '<a href="https://alpha.invalid/story">' in message.payload_text
+        # The URL appears exactly once — inside the href, never again as bare text.
+        assert message.payload_text.count("https://alpha.invalid/story") == 1
+
+    @pytest.mark.parametrize("dangerous", ["Q&A", "5 < 6", "AI > hype", "<script>bad()"])
+    def test_headline_special_characters_are_escaped_not_left_raw(self, dangerous: str) -> None:
+        message = build_message(version(title=f"{dangerous} — новина"))
+        # The dangerous raw characters do not appear outside of our own inserted tags.
+        payload_without_our_tags = (
+            message.payload_text
+            .replace("<b>", "").replace("</b>", "")
+            .replace('<a href="https://alpha.invalid/story">', "").replace("</a>", "")
+        )
+        assert "<script>" not in payload_without_our_tags
+        # And the message still parses/sends as well-formed HTML: every remaining '<'
+        # belongs to one of our own two permitted tags.
+        assert unescape_html(message.payload_text)  # round-trips without raising
+
+    def test_body_special_characters_are_escaped(self) -> None:
+        message = build_message(version(body="Ціна < 100 & рейтинг > 90%."))
+        assert "Ціна &lt; 100 &amp; рейтинг &gt; 90%." in message.payload_text
+        # And the reader still sees exactly the raw approved text back out.
+        assert "Ціна < 100 & рейтинг > 90%." in displayed_text(message)
+
+    def test_a_source_url_with_an_ampersand_is_a_safe_attribute(self) -> None:
+        subject = version(
+            source_url="https://x.invalid/a?b=1&c=2",
+            source_attribution="🔗 Джерело: X\nhttps://x.invalid/a?b=1&c=2",
+        )
+        message = build_message(subject)
+        assert 'href="https://x.invalid/a?b=1&amp;c=2"' in message.payload_text
+        # No unescaped bare '&' remains outside of an entity in the href.
+        assert "b=1&c=2" not in message.payload_text

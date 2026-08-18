@@ -97,6 +97,16 @@ No caps-lock shouting, no manufactured urgency, no invented claims.
 
 ## Emoji
 
+**For a post with a source (NEWS, and anything else that cites one) this is no longer a
+writing decision.** `writing.format.render_post` inserts the headline emoji (from the
+draft's `category`) and rotates a fixed sequence across body paragraphs deterministically
+— see the module's `_HEADLINE_EMOJI` / `_PARAGRAPH_EMOJI` tables. A writer's own headline
+text is carried through unchanged, but does not need — and should not add — its own
+leading emoji; the renderer's is what a reader sees.
+
+The guidance below (what emoji mean, one per block) still describes the *editorial
+original* content this renderer leaves untouched — a prompt or explainer with no source,
+where nothing is inserted automatically and a writer's own choices are what a reader sees.
 Deliberate, not decorative. Usually **one headline emoji plus zero to three** in the
 body. Never one per sentence.
 
@@ -164,12 +174,17 @@ well. No paper titles, no benchmark tables, no architecture.
 
 ## Source
 
-Every post ends with the source. Python assembles the line — supply the label and URL:
+Every post ends with the source. A writer still only supplies the label and URL —
+`render_post` assembles what a reader actually sees, and what that looks like changed:
+the label is now a **hidden hyperlink**, not a bare URL on its own line —
 
 ```
 🔗 Джерело: OpenAI
-https://openai.com/index/...
 ```
+
+— with `OpenAI` linking to the article. No raw `https://...` line is ever shown; the URL
+lives only in the link itself. (Content with no source to attribute — an explainer, most
+prompts — gets no source line at all, exactly as before.)
 
 A post without a traceable source is not published here. The line is part of the hashed
 content, so it cannot quietly disappear after review.

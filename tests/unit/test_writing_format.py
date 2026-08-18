@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from ai_news_editor.domain.enums import PostFormat
+from ai_news_editor.domain.enums import Category, PostFormat
 from ai_news_editor.writing.format import (
     ALLOWED_TAGS,
     FORMAT_TARGETS,
@@ -14,6 +14,7 @@ from ai_news_editor.writing.format import (
     check_length,
     disallowed_tags,
     hard_limit_problem,
+    has_any_markup,
     render_post,
     source_line,
     validate_url,
@@ -100,6 +101,104 @@ class TestPostAssembly:
         )
         for fragment in ("—", "«", "»", "'", "🤯", "новини"):
             assert fragment in text
+
+
+class TestNewsStyleRendering:
+    """The channel's NEWS visual style: bold emoji headline, emoji-led paragraphs,
+    hidden source hyperlink — applied whenever a post has a source to attribute."""
+
+    def test_the_headline_is_bold_and_emoji_led(self) -> None:
+        text = render_post(
+            headline="Новина дня", body="Один абзац тексту.",
+            source_label="Google", source_url="https://x.invalid/a",
+            category=Category.PRODUCT_UPDATE,
+        )
+        assert text.startswith("<b>🚀 Новина дня</b>")
+
+    def test_an_unknown_category_falls_back_to_the_default_emoji(self) -> None:
+        text = render_post(
+            headline="Новина", body="Текст.",
+            source_label="X", source_url="https://x.invalid/a", category=None,
+        )
+        assert text.startswith("<b>🧩 Новина</b>")
+
+    @pytest.mark.parametrize(
+        "category,emoji",
+        [
+            (Category.USEFUL_TOOL, "🛠"),
+            (Category.CREATIVE_AI, "🎨"),
+            (Category.AI_FOR_LEARNING, "🧠"),
+        ],
+    )
+    def test_headline_emoji_is_deterministic_per_category(
+        self, category: Category, emoji: str
+    ) -> None:
+        text = render_post(
+            headline="Х", body="Текст.", source_label="X",
+            source_url="https://x.invalid/a", category=category,
+        )
+        assert text.startswith(f"<b>{emoji} Х</b>")
+
+    def test_paragraphs_are_split_only_on_existing_blank_lines(self) -> None:
+        body = "Перший абзац.\n\nДругий абзац.\n\nТретій абзац."
+        text = render_post(
+            headline="Н", body=body, source_label="X", source_url="https://x.invalid/a",
+        )
+        assert "✨ Перший абзац." in text
+        assert "🛠 Другий абзац." in text
+        assert "🔍 Третій абзац." in text
+        # Blank-line-separated: every paragraph line is its own block.
+        assert "\n\n✨ Перший абзац.\n\n🛠 Другий абзац.\n\n🔍 Третій абзац." in text
+
+    def test_a_single_paragraph_body_is_not_force_split(self) -> None:
+        text = render_post(
+            headline="Н", body="Одне суцільне речення без порожніх рядків.",
+            source_label="X", source_url="https://x.invalid/a",
+        )
+        assert "✨ Одне суцільне речення без порожніх рядків." in text
+        assert text.count("🛠") == 0
+
+    def test_paragraph_emoji_rotates_and_wraps(self) -> None:
+        body = "\n\n".join(f"Абзац {i}." for i in range(1, 8))  # 7 paragraphs, 6 emoji
+        text = render_post(
+            headline="Н", body=body, source_label="X", source_url="https://x.invalid/a",
+        )
+        assert "✨ Абзац 1." in text
+        assert "✨ Абзац 7." in text  # wraps back to the first emoji
+
+    def test_the_source_is_a_hidden_hyperlink_not_a_bare_url(self) -> None:
+        text = render_post(
+            headline="Н", body="Т.", source_label="Google",
+            source_url="https://blog.google/x",
+        )
+        assert '<a href="https://blog.google/x">Джерело: Google</a>' in text
+        # No standalone line consisting only of the raw URL.
+        assert "https://blog.google/x" not in text.replace(
+            '<a href="https://blog.google/x">Джерело: Google</a>', ""
+        )
+
+    def test_editorial_content_without_a_source_keeps_the_plain_style(self) -> None:
+        text = render_post(headline="Заголовок", body="Тіло.")
+        assert text == "Заголовок\n\nТіло."
+        assert "<b>" not in text
+        assert "Джерело" not in text
+
+
+class TestAnyMarkupDetection:
+    def test_plain_text_has_no_markup(self) -> None:
+        assert has_any_markup("Просто текст без тегів.") is False
+
+    @pytest.mark.parametrize(
+        "text",
+        ["<b>жирний</b>", "звичайний <i>курсив</i>", '<a href="https://x.invalid">лінк</a>'],
+    )
+    def test_even_permitted_tags_count_as_markup(self, text: str) -> None:
+        """Stricter than disallowed_tags on purpose — see has_any_markup's docstring:
+        automation may not use any markup, not just the tags humans may not use."""
+        assert has_any_markup(text) is True
+
+    def test_a_bare_comparison_is_not_mistaken_for_a_tag(self) -> None:
+        assert has_any_markup("n < 5 та m > 3") is False
 
 
 class TestLengthPolicy:

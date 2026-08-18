@@ -249,7 +249,7 @@ class TestNoFakeProvenance:
     ) -> None:
         """A prompt post is a report of someone else's test, so it names them."""
         _draft, version = make_draft(connection, ContentType.PROMPT)
-        assert "🔗 Джерело" in render_version(version)
+        assert "Джерело" in render_version(version)
 
     def test_a_news_post_still_carries_its_source_line(
         self, connection: sqlite3.Connection, seeded_article, drafts: DraftRepository
@@ -260,7 +260,7 @@ class TestNoFakeProvenance:
         _draft, version = drafts.create(
             article_id=seeded_article.id, **DRAFT_CONTENT  # type: ignore[arg-type]
         )
-        assert "🔗 Джерело" in render_version(version)
+        assert "Джерело" in render_version(version)
 
 
 class TestNewcomerIsStorable:

@@ -216,7 +216,7 @@ class TestFooter:
                 footer_text=render_footer(HANDLE, emoji="👉"),
             )
         )
-        assert "🔗 Джерело" in rendered
+        assert "Джерело" in rendered
         assert rendered.rstrip().endswith(HANDLE)
         assert "\n\n👉" in rendered
 

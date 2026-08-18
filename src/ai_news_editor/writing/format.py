@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from ai_news_editor.domain.enums import PostFormat
+from ai_news_editor.domain.enums import Category, PostFormat
 from ai_news_editor.domain.models import DraftVersion
 
 #: Editorial targets in characters of rendered post text, not hard limits. A post
@@ -43,9 +43,91 @@ _TAG_PATTERN = re.compile(r"</?([a-zA-Z0-9]+)[^>]*>")
 
 SOURCE_PREFIX = "🔗 Джерело"
 
+#: One emoji per editorial category, for the bold headline of a NEWS post. Deterministic
+#: and fixed rather than a model call: the channel's whole visual identity should not
+#: depend on an extra Gemini round trip just to pick a symbol. Falls back to
+#: ``_DEFAULT_HEADLINE_EMOJI`` for a category with no entry (there is none today, but a
+#: future ``Category`` addition should degrade gracefully rather than raise).
+_HEADLINE_EMOJI: dict[Category, str] = {
+    Category.PRODUCT_UPDATE: "🚀",
+    Category.USEFUL_TOOL: "🛠",
+    Category.WOW: "🤯",
+    Category.AI_FAIL: "⚠️",
+    Category.DEEPFAKE_WATCH: "🕵️",
+    Category.SCAM_MISINFO: "🔐",
+    Category.CREATIVE_AI: "🎨",
+    Category.AI_FOR_WORK: "💼",
+    Category.AI_FOR_LEARNING: "🧠",
+    Category.EVERYDAY_AI: "📱",
+    Category.TRENDING: "🔥",
+    Category.EXPLAINED_SIMPLY: "💡",
+    Category.SCIENCE_LITE: "🔬",
+    Category.AI_DRAMA: "🎭",
+}
+_DEFAULT_HEADLINE_EMOJI = "🧩"
+
+#: A simple, stable rotation for body paragraphs — not per-paragraph NLP classification,
+#: just enough visual rhythm that consecutive paragraphs do not look identical. Cycles
+#: if a post ever has more paragraphs than emoji.
+_PARAGRAPH_EMOJI: tuple[str, ...] = ("✨", "🛠", "🔍", "📌", "🌍", "💡")
+
+_PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
+
 
 class UnsafeLinkError(ValueError):
     """A URL uses a scheme this application will not put in a post."""
+
+
+def has_any_markup(text: str) -> bool:
+    """Whether ``text`` contains anything that looks like an HTML tag at all.
+
+    Stricter than :func:`disallowed_tags`, which only flags tags outside the permitted
+    subset — a human writer may deliberately use ``<b>`` or ``<a href="">`` for inline
+    emphasis, and that stays allowed. Automation has no such allowance: a NEWS post's
+    bold headline, its paragraph emoji and its hidden source link are entirely this
+    renderer's decision, never the model's, so generated headline/body text must not
+    contain markup of any kind, permitted or not.
+    """
+    return bool(_TAG_PATTERN.search(text))
+
+
+def _split_paragraphs(body: str) -> list[str]:
+    """Existing blank-line boundaries only — never a mid-sentence, character-count split."""
+    parts = _PARAGRAPH_SPLIT.split(body.strip())
+    paragraphs = [part.strip() for part in parts if part.strip()]
+    return paragraphs or [body.strip()]
+
+
+def _escape_attribute(value: str) -> str:
+    """Minimal escaping for a value placed inside an HTML attribute.
+
+    ``escape_html`` (publishing.message) leaves a recognized tag's own markup
+    untouched — it only escapes the text *between* tags — so the ``href`` value has to
+    be made attribute-safe here, at the point this renderer builds the tag itself.
+    """
+    return value.replace("&", "&amp;").replace('"', "&quot;")
+
+
+def _headline_line(headline: str, category: Category | None) -> str:
+    emoji = _DEFAULT_HEADLINE_EMOJI
+    if category is not None:
+        emoji = _HEADLINE_EMOJI.get(category, _DEFAULT_HEADLINE_EMOJI)
+    return f"<b>{emoji} {headline.strip()}</b>"
+
+
+def _body_lines(body: str) -> list[str]:
+    paragraphs = _split_paragraphs(body)
+    return [
+        f"{_PARAGRAPH_EMOJI[index % len(_PARAGRAPH_EMOJI)]} {paragraph}"
+        for index, paragraph in enumerate(paragraphs)
+    ]
+
+
+def _source_hyperlink(source_label: str, source_url: str) -> str:
+    """The attribution line: a hidden hyperlink, not a bare URL on its own line."""
+    url = validate_url(source_url)
+    label = source_label.strip() or "Джерело"
+    return f'🔗 <a href="{_escape_attribute(url)}">Джерело: {label}</a>'
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,21 +179,42 @@ def source_line(source_label: str, source_url: str) -> str:
 
 
 def render_post(
-    *, headline: str, body: str, source_label: str = "", source_url: str = ""
+    *,
+    headline: str,
+    body: str,
+    source_label: str = "",
+    source_url: str = "",
+    category: Category | None = None,
 ) -> str:
     """Assemble the text that would be sent.
 
     Deterministic and computed by Python, not supplied by the writer, so the stored
     content hash covers exactly the post a reviewer approves.
 
-    The attribution line appears only when there is something to attribute. News always
-    has a source and the writing import refuses a draft without one. A prompt or an
-    explainer was written here, and appending "🔗 Джерело:" to it would either name a
-    source that does not exist or point the reader at nothing.
+    Presence of ``source_url`` is what distinguishes a NEWS post from editorial-original
+    content (see ``Draft._exactly_one_origin`` — NEWS is the only content type that ever
+    has one) and is the whole switch between the two styles below:
+
+    * with a source: the channel's NEWS style — a bold, emoji-led headline; each
+      paragraph on its own emoji-led line; a hidden hyperlink for attribution instead of
+      a bare URL. Every tag here is inserted by this function, never by the writer —
+      see ``has_any_markup``, which is what keeps automation-generated headline/body
+      text out of this decision entirely.
+    * without one: unchanged plain text. A prompt or an explainer was written here, and
+      giving it a bold headline it never had, or appending "🔗 Джерело:" to it, would
+      either invent a visual identity nobody approved or name a source that does not
+      exist.
     """
-    parts = [headline.strip(), body.strip()]
-    if source_url:
-        parts.append(source_line(source_label or "Джерело", source_url))
+    headline = headline.strip()
+    body = body.strip()
+    if not source_url:
+        return "\n\n".join([headline, body])
+
+    parts = [
+        _headline_line(headline, category),
+        *_body_lines(body),
+        _source_hyperlink(source_label or "Джерело", source_url),
+    ]
     return "\n\n".join(parts)
 
 
@@ -158,6 +261,7 @@ def render_version(version: DraftVersion) -> str:
         body=version.body,
         source_label=source_label_of(version.source_attribution),
         source_url=source_url_of(version),
+        category=version.category,
     )
     if version.footer_text:
         text = f"{text}\n\n{version.footer_text}"
