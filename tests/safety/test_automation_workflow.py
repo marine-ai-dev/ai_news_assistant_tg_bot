@@ -138,6 +138,23 @@ class TestKillSwitchWiring:
         )
 
 
+class TestRepositoryVariableWiring:
+    def test_daily_post_limit_is_forwarded_from_the_repository_variable(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """Settings.daily_post_limit has a real default (3) and no code path reads it
+        from anywhere but the environment — a repository Variable that exists and is
+        never forwarded here would silently have no effect at all."""
+        env = _step(workflow, "Run automation")["env"]
+        assert env["AI_NEWS_DAILY_POST_LIMIT"] == "${{ vars.AI_NEWS_DAILY_POST_LIMIT }}"
+
+    def test_llm_model_is_forwarded_from_the_repository_variable(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        env = _step(workflow, "Run automation")["env"]
+        assert env["AI_NEWS_LLM_MODEL"] == "${{ vars.AI_NEWS_LLM_MODEL }}"
+
+
 class TestStatePersistence:
     def test_persist_step_requires_live_mode_and_a_published_outcome(
         self, workflow: dict[str, Any]

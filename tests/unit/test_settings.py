@@ -101,6 +101,34 @@ class TestSecrets:
         assert settings.telegram_bot_token.get_secret_value() == "123456:ABCDEF"
 
 
+class TestDailyPostLimit:
+    """GitHub Actions ``env:`` blocks always set the key, even to "", when the
+    referenced repository Variable does not exist — a plain YAML env block has no way
+    to omit a key conditionally. This is what makes the very first automation workflow
+    run, on a repo that has not yet created ``AI_NEWS_DAILY_POST_LIMIT``, survive."""
+
+    def test_blank_falls_back_to_the_default_not_a_parse_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_DAILY_POST_LIMIT", "")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.daily_post_limit == Settings.DEFAULT_DAILY_POST_LIMIT == 3
+
+    def test_unset_is_the_same_default(self) -> None:
+        assert _settings().daily_post_limit == 3
+
+    def test_an_explicit_value_from_the_environment_is_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_DAILY_POST_LIMIT", "7")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.daily_post_limit == 7
+
+    def test_a_negative_value_is_still_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            _settings(daily_post_limit=-1)
+
+
 class TestAFreshCloneStarts:
     """The .env.example a newcomer copies must actually work.
 

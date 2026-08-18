@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal, Self
+from typing import ClassVar, Literal, Self
 
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -146,8 +146,13 @@ class Settings(BaseSettings):
             "rename or a deliberate switch needs no code change."
         ),
     )
+    #: Named rather than inlined so _blank_means_the_default below can return the exact
+    #: same value the Field's own default provides, with one definition to keep in sync.
+    #: ClassVar so Pydantic treats it as a plain class attribute, not a model field.
+    DEFAULT_DAILY_POST_LIMIT: ClassVar[int] = 3
+
     daily_post_limit: int = Field(
-        default=3,
+        default=DEFAULT_DAILY_POST_LIMIT,
         ge=0,
         description=(
             "Maximum automated NEWS publications per Europe/Kyiv calendar day, counted "
@@ -173,6 +178,24 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator("daily_post_limit", mode="before")
+    @classmethod
+    def _blank_means_the_default(cls, value: object) -> object:
+        """Same problem as ``_blank_means_unset`` above, different fix: this field is
+        not optional, so a blank string cannot become ``None`` the way it does there —
+        it becomes the field's own default instead.
+
+        This exists specifically for GitHub Actions: ``env: AI_NEWS_DAILY_POST_LIMIT:
+        ${{ vars.AI_NEWS_DAILY_POST_LIMIT }}`` always sets that key in the job's
+        environment, even to ``""``, when the repository Variable has never been
+        created — a plain YAML ``env:`` block has no way to omit a key conditionally.
+        Without this, the very first workflow run on a repo that has not yet set that
+        Variable would fail Settings validation before doing anything else.
+        """
+        if isinstance(value, str) and not value.strip():
+            return cls.DEFAULT_DAILY_POST_LIMIT
         return value
 
     @field_validator("telegram_channel", "test_channel")

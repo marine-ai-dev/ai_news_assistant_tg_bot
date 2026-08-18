@@ -777,6 +777,39 @@ class TestSuccessfulPublication:
         assert PublicationRepository(connection).count() == 1
         assert len([c for c in telegram.sent if "text" in c]) == 1  # type: ignore[attr-defined]
 
+    def test_one_run_publishes_at_most_one_post_even_with_room_left_in_the_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """AI_NEWS_DAILY_POST_LIMIT bounds a *day*, not a single GitHub Actions
+        execution — a limit of 3 (or higher) must not tempt run_automation() into
+        looping over the candidate list. It selects one, generates one, publishes one,
+        and returns, regardless of how many other eligible candidates or how much of
+        the daily budget remains."""
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        seed_official_article(connection)
+        # Newest-first ordering makes the last-seeded article candidate "1" — see
+        # _eligible_candidates. Generating against its own URL, not the first
+        # article's, is what makes this test select cleanly rather than tripping the
+        # URL-mismatch rejection that (correctly) exists for exactly this mistake.
+        newest_article = seed_official_article(connection)
+        settings = build_settings(tmp_path, daily_post_limit=3)
+        telegram = fake_telegram_transport()
+        generation = {**VALID_GENERATION, "source_url": newest_article.canonical_url}
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=telegram,
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.PUBLISHED
+        assert PublicationRepository(connection).count() == 1
+        assert len([c for c in telegram.sent if "text" in c]) == 1  # type: ignore[attr-defined]
+
     def test_the_actor_is_exactly_gemini_auto(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
