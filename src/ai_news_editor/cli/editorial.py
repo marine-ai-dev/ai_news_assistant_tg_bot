@@ -281,6 +281,14 @@ def show_shortlist(
 @app.command("preview")
 def preview_editorial(
     limit: Annotated[int, typer.Option("--limit", "-n", help="How many to show.")] = 10,
+    all_categories: Annotated[
+        bool,
+        typer.Option(
+            "--all-categories",
+            help="Show one rendered Telegram-preview example per EditorialCategory, "
+            "from offline synthetic fixtures. No database, no network, no Gemini.",
+        ),
+    ] = False,
 ) -> None:
     """Deterministic preview of editorial classification and diversity ranking.
 
@@ -289,7 +297,16 @@ def preview_editorial(
     candidate ranks where it does: its source family and trust tier, whether that
     source's registry metadata actually supports its content type and evidence
     classification, and the diversity adjustment against recent publications.
+
+    ``--all-categories`` instead shows a fully offline sample gallery: one rendered
+    Telegram post per category, from synthetic fixtures (``rendering.fixtures``) —
+    useful for reviewing the visual style itself without a database or a live
+    candidate.
     """
+    if all_categories:
+        _preview_all_categories()
+        return
+
     from ai_news_editor.cli.main import open_migrated_database
 
     connection = open_migrated_database()
@@ -360,6 +377,33 @@ def preview_editorial(
         "classified via Step 3's schema; a shortlisted candidate with none defaults to "
         "NEWS, as every automated evaluation has produced so far.[/dim]"
     )
+
+
+def _preview_all_categories() -> None:
+    """Section 46: eight rendered examples, entirely offline."""
+    from ai_news_editor.media.models import MediaOutcome, RejectionReason
+    from ai_news_editor.media.workspace import MediaWorkspace
+    from ai_news_editor.rendering.fixtures import SAMPLE_CONTENT
+    from ai_news_editor.rendering.plan import build_publication_plan
+
+    console.print(
+        "[bold]Editorial style gallery[/bold] — offline synthetic fixtures, "
+        "no database, no network, no Gemini, no Telegram.\n"
+    )
+    with MediaWorkspace(label="preview-gallery") as workspace:
+        for category, content in SAMPLE_CONTENT.items():
+            outcome = MediaOutcome(media=None, reason=RejectionReason.POLICY_FORBIDS)
+            variant, plan = build_publication_plan(content, outcome, workspace)
+            rendered_text = plan.steps[0].text or ""
+            body = (
+                f"[dim]evidence: {content.evidence.value} · plan: {variant.value}[/dim]\n\n"
+                f"{rendered_text}"
+            )
+            if plan.warnings:
+                body += "\n\n[yellow]" + "; ".join(plan.warnings) + "[/yellow]"
+            console.print(
+                Panel(body, title=f"{category.value}", title_align="left", border_style="cyan")
+            )
 
 
 @app.command("status")
