@@ -154,6 +154,18 @@ class TestRepositoryVariableWiring:
         env = _step(workflow, "Run automation")["env"]
         assert env["AI_NEWS_LLM_MODEL"] == "${{ vars.AI_NEWS_LLM_MODEL }}"
 
+    def test_gemini_read_timeout_is_forwarded_from_the_repository_variable(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        """A blank/absent Variable must fall back to Settings' own default (90s), not
+        error — see Settings._blank_means_the_default, exercised directly in
+        tests/unit/test_settings.py::TestGeminiReadTimeout."""
+        env = _step(workflow, "Run automation")["env"]
+        assert (
+            env["AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS"]
+            == "${{ vars.AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS }}"
+        )
+
 
 class TestStatePersistence:
     def test_persist_step_requires_live_mode_and_a_published_outcome(

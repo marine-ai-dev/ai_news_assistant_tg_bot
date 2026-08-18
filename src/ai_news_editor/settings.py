@@ -146,10 +146,13 @@ class Settings(BaseSettings):
             "rename or a deliberate switch needs no code change."
         ),
     )
-    #: Named rather than inlined so _blank_means_the_default below can return the exact
-    #: same value the Field's own default provides, with one definition to keep in sync.
-    #: ClassVar so Pydantic treats it as a plain class attribute, not a model field.
+    #: Named rather than inlined so tests and docs can reference the exact value
+    #: without repeating the literal — the validator below does not read these; it
+    #: looks the default up generically from the field itself, so there is only one
+    #: real source of truth (the ``Field(default=...)`` calls) for it to drift from.
+    #: ClassVars, so Pydantic treats them as plain class attributes, not model fields.
     DEFAULT_DAILY_POST_LIMIT: ClassVar[int] = 3
+    DEFAULT_GEMINI_READ_TIMEOUT_SECONDS: ClassVar[float] = 90.0
 
     daily_post_limit: int = Field(
         default=DEFAULT_DAILY_POST_LIMIT,
@@ -158,6 +161,18 @@ class Settings(BaseSettings):
             "Maximum automated NEWS publications per Europe/Kyiv calendar day, counted "
             "across every workflow run that day. A scheduled run past the limit is a "
             "safe no-op, not an error."
+        ),
+    )
+    gemini_read_timeout_seconds: float = Field(
+        default=DEFAULT_GEMINI_READ_TIMEOUT_SECONDS,
+        gt=0,
+        description=(
+            "How long to wait for Gemini's response body once the request is sent, per "
+            "attempt (not the total across retries). Separate from the connect/write/pool "
+            "timeouts, which are short and fixed — those guard against a network that "
+            "never answers at all, not against a model that is genuinely still "
+            "generating. A real GitHub Actions run needed more than the original flat "
+            "30s here; see automation/gemini.py."
         ),
     )
 
@@ -180,12 +195,15 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("daily_post_limit", mode="before")
+    @field_validator("daily_post_limit", "gemini_read_timeout_seconds", mode="before")
     @classmethod
-    def _blank_means_the_default(cls, value: object) -> object:
-        """Same problem as ``_blank_means_unset`` above, different fix: this field is
+    def _blank_means_the_default(cls, value: object, info: ValidationInfo) -> object:
+        """Same problem as ``_blank_means_unset`` above, different fix: these fields are
         not optional, so a blank string cannot become ``None`` the way it does there —
-        it becomes the field's own default instead.
+        it becomes the field's own configured default instead, looked up generically
+        by field name rather than hard-coded per field, so a third field with the same
+        need only has to be added to the decorator above, not given its own copy of
+        this method.
 
         This exists specifically for GitHub Actions: ``env: AI_NEWS_DAILY_POST_LIMIT:
         ${{ vars.AI_NEWS_DAILY_POST_LIMIT }}`` always sets that key in the job's
@@ -195,7 +213,7 @@ class Settings(BaseSettings):
         Variable would fail Settings validation before doing anything else.
         """
         if isinstance(value, str) and not value.strip():
-            return cls.DEFAULT_DAILY_POST_LIMIT
+            return cls.model_fields[info.field_name].default
         return value
 
     @field_validator("telegram_channel", "test_channel")

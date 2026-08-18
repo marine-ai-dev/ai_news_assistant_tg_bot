@@ -129,6 +129,35 @@ class TestDailyPostLimit:
             _settings(daily_post_limit=-1)
 
 
+class TestGeminiReadTimeout:
+    """Same blank-string-from-GitHub-Actions problem as daily_post_limit above, and
+    the same fix — see Settings._blank_means_the_default, which now covers both."""
+
+    def test_default_is_90_seconds(self) -> None:
+        assert Settings.DEFAULT_GEMINI_READ_TIMEOUT_SECONDS == 90.0
+        assert _settings().gemini_read_timeout_seconds == 90.0
+
+    def test_blank_falls_back_to_the_default_not_a_parse_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS", "")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.gemini_read_timeout_seconds == 90.0
+
+    def test_an_explicit_value_from_the_environment_is_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_NEWS_GEMINI_READ_TIMEOUT_SECONDS", "45")
+        settings = Settings(_env_file=None)  # type: ignore[call-arg]
+        assert settings.gemini_read_timeout_seconds == 45.0
+
+    def test_zero_or_negative_is_refused(self) -> None:
+        with pytest.raises(ValidationError):
+            _settings(gemini_read_timeout_seconds=0)
+        with pytest.raises(ValidationError):
+            _settings(gemini_read_timeout_seconds=-5)
+
+
 class TestAFreshCloneStarts:
     """The .env.example a newcomer copies must actually work.
 

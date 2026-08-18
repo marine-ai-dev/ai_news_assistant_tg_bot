@@ -369,7 +369,8 @@ def _run_pipeline(
     # infrastructure worked; there was simply nothing worth publishing today.
     try:
         with GeminiClient(
-            settings.gemini_api_key.get_secret_value(), model=settings.llm_model
+            settings.gemini_api_key.get_secret_value(), model=settings.llm_model,
+            read_timeout=settings.gemini_read_timeout_seconds,
         ) as client:
             try:
                 selection = select_candidate(client, candidates)

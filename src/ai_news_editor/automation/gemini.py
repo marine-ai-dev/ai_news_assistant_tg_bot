@@ -40,7 +40,20 @@ from ai_news_editor.observability.redaction import redact
 logger = get_logger(__name__)
 
 API_ROOT = "https://generativelanguage.googleapis.com/v1beta"
-DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: Four separate budgets, not one flat number — a real GitHub Actions run is what
+#: caught the original single 30s timeout being wrong: connecting to Google's API and
+#: sending the request are fast and either work or don't within a few seconds, but
+#: *reading* the response body has to wait for the model to actually finish generating,
+#: which can genuinely take longer than 30s for a full-article generation prompt.
+#: Bundling all of that into one number meant the read budget was only ever as generous
+#: as the connect budget needed to be — this is why httpx.Timeout takes four values
+#: instead of one.
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+DEFAULT_READ_TIMEOUT_SECONDS = 90.0
+DEFAULT_WRITE_TIMEOUT_SECONDS = 30.0
+DEFAULT_POOL_TIMEOUT_SECONDS = 10.0
+
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BACKOFF_SECONDS = 2.0
 
@@ -99,7 +112,10 @@ class GeminiClient:
         *,
         model: str,
         transport: httpx.BaseTransport | None = None,
-        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        read_timeout: float = DEFAULT_READ_TIMEOUT_SECONDS,
+        connect_timeout: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        write_timeout: float = DEFAULT_WRITE_TIMEOUT_SECONDS,
+        pool_timeout: float = DEFAULT_POOL_TIMEOUT_SECONDS,
         api_root: str = API_ROOT,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
@@ -117,7 +133,12 @@ class GeminiClient:
         self._backoff_seconds = backoff_seconds
         self._client = httpx.Client(
             transport=transport,
-            timeout=timeout,
+            timeout=httpx.Timeout(
+                connect=connect_timeout,
+                read=read_timeout,
+                write=write_timeout,
+                pool=pool_timeout,
+            ),
             headers={
                 "x-goog-api-key": api_key.strip(),
                 "Content-Type": "application/json",
