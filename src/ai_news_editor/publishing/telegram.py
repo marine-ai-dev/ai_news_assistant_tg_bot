@@ -462,8 +462,8 @@ class TelegramClient:
             lowered = description.lower()
             if "chat not found" in lowered or "chat_id is empty" in lowered:
                 return TelegramDestinationError(
-                    f"{message}. Check AI_NEWS_TELEGRAM_CHANNEL, and note that a bot can "
-                    "only resolve a chat it has been added to."
+                    f"{message}. Check the configured channel or chat id, and note that "
+                    "a bot can only resolve a chat it has been added to."
                 )
             return TelegramContentError(message)
         return TelegramApiError(message, error_code=error_code)

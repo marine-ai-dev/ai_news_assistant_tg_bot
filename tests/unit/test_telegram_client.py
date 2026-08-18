@@ -99,8 +99,13 @@ class TestGetChat:
         assert chat.postable
 
     def test_an_unknown_chat_is_a_destination_error(self) -> None:
+        """The message deliberately names no specific setting — this classifier has no
+        idea whether the caller was checking AI_NEWS_TELEGRAM_CHANNEL,
+        AI_NEWS_TEST_CHANNEL, or something else read from the database (the review
+        bot's own channel resolution). Naming one would be actively wrong for the
+        others; see cli/publish.py's telegram_doctor --test for exactly this case."""
         with client_with(fails(400, "Bad Request: chat not found")) as client, pytest.raises(
-            TelegramDestinationError, match="AI_NEWS_TELEGRAM_CHANNEL"
+            TelegramDestinationError, match="chat not found"
         ):
             client.get_chat("@nope")
 
