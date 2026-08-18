@@ -649,6 +649,38 @@ class TestFailClosedPaths:
         assert result.outcome is Outcome.SELECTION_REJECTED
         assert PublicationRepository(connection).count() == 0
 
+    def test_a_generation_response_missing_required_fields_is_a_quiet_rejection_not_a_crash(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The regression test for a real bug: a real GitHub Actions dry-run (run
+        32120276028) crashed the whole process with an uncaught pydantic.ValidationError
+        the first time a live Gemini response was syntactically valid JSON, was not a
+        rejection, but was missing a field GeneratedPost's own validator requires (here:
+        body and confidence) — because generate_post(), unlike select_candidate(), had
+        no try/except around GeneratedPost.model_validate() at all. This must be exactly
+        as quiet as any other ordinary generation rejection.
+        """
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                # content_type + headline present, body and confidence missing —
+                # syntactically valid JSON, fails GeneratedPost's own model_validator.
+                generation={"content_type": "NEWS", "headline": "A real but incomplete headline"},
+            ),
+            telegram_transport=None,
+        )
+
+        result = run_automation(connection, settings, mode="live")
+
+        assert result.outcome is Outcome.GENERATION_REJECTED, (
+            f"expected a quiet rejection, got {result.outcome}: {result.detail}"
+        )
+        assert PublicationRepository(connection).count() == 0
+
     def test_a_permanent_gemini_rejection_during_selection_is_loud_not_quiet(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

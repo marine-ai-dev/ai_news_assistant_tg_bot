@@ -212,20 +212,38 @@ def generate_post(
     """Ask Gemini to write the post from the full article text of one selected story.
 
     Raises:
-        GenerationRejected: Gemini declined to write from this article, or its own
-            stated confidence fell below ``confidence_threshold``, or its echoed source
-            URL does not match the candidate this generation call was for.
-        GeminiResponseError: the response did not parse or did not match the schema —
-            propagated rather than wrapped, because this is the same "malformed JSON is
-            a rejection" case the caller already handles for the selection step.
+        GenerationRejected: Gemini declined to write from this article, its response
+            was not valid JSON or did not match the required shape (a real GitHub
+            Actions run is what proved this happens: a live model can return
+            syntactically valid JSON that is still missing a required field), its own
+            stated confidence fell below ``confidence_threshold``, or its echoed
+            source URL does not match the candidate this generation call was for.
     """
     prompt = _render_generation_prompt(candidate, article_text)
-    result = client.generate(
-        system_instruction=_GENERATION_SYSTEM_INSTRUCTION,
-        prompt=prompt,
-        response_schema=_GENERATION_RESPONSE_SCHEMA,
-    )
-    post = GeneratedPost.model_validate(parse_json_object(result.text))
+    try:
+        result = client.generate(
+            system_instruction=_GENERATION_SYSTEM_INSTRUCTION,
+            prompt=prompt,
+            response_schema=_GENERATION_RESPONSE_SCHEMA,
+        )
+        post = GeneratedPost.model_validate(parse_json_object(result.text))
+    except GeminiResponseError as exc:
+        raise GenerationRejected(f"Gemini's generation response was unusable: {exc}") from exc
+    except ValidationError as exc:
+        # Valid JSON, wrong shape — an ordinary rejection, same as GeminiResponseError
+        # above, and the same reasoning select_candidate() already applies: deliberately
+        # NOT a bare `except Exception`, which would also catch GeminiConfigurationError
+        # / GeminiTransientError / GeminiRequestError from the client.generate() call
+        # above and misreport a broken API key or an exhausted retry budget as "Gemini
+        # declined to write" instead of the loud GEMINI_ERROR run_automation's own
+        # except clause (around the whole select-then-generate block) exists to surface
+        # for exactly those. Previously uncaught here — a real GitHub Actions run
+        # crashed the whole process with a raw pydantic.ValidationError the first time a
+        # live model response was missing a required field, instead of the quiet
+        # GENERATION_REJECTED this is supposed to be.
+        raise GenerationRejected(
+            f"Gemini's generation response did not match the schema: {exc}"
+        ) from exc
 
     if post.is_rejection:
         raise GenerationRejected(post.rejection_reason or "Gemini declined without a reason")
