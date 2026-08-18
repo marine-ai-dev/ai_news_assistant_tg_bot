@@ -643,7 +643,16 @@ class TestNoIntegrationsExist:
         distinct module from the changelog adapter above it — but it is still firmly
         inside the sources layer, and still selectolax, never a second parser.
         """
-        allowed = {"sources/html_changelog.py", "pipeline/text.py", "sources/fulltext.py"}
+        allowed = {
+            "sources/html_changelog.py",
+            "pipeline/text.py",
+            "sources/fulltext.py",
+            # Step 4 (media pipeline): reads an already-fetched article page's Open
+            # Graph / JSON-LD metadata for a hero image or video. A distinct purpose
+            # from fulltext extraction (media, not readable text) and a distinct layer
+            # (media, not sources) — but still selectolax, never a second parser.
+            "media/discover.py",
+        }
         offenders = [
             name for name, text in self._sources() if "selectolax" in text and name not in allowed
         ]
@@ -664,6 +673,17 @@ class TestNoIntegrationsExist:
             # directly, so it stays inside the one existing HTTP boundary rather than
             # opening a new one.
             "automation/gemini.py",
+            # Step 4 (media pipeline): downloads third-party image/video bytes, which
+            # is untrusted input in a way feed URLs from the operator-controlled
+            # source registry are not. Deliberately its own boundary with its own
+            # stronger SSRF check (media/urlsafety.py resolves DNS; sources/http.py's
+            # validate_url explicitly does not) rather than reusing sources/http.py's
+            # HttpClient and its narrower trust assumption.
+            "media/download.py",
+            # media/pipeline.py imports httpx only for its transport type hint (passed
+            # straight through to media/download.py's own client for tests) — it makes
+            # no request of its own; the actual boundary is the entry above.
+            "media/pipeline.py",
         }
         import re
 

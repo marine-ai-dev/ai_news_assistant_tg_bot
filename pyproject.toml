@@ -22,6 +22,8 @@ dependencies = [
     "PyYAML>=6.0",
     # Phase 3 — HTML changelog parsing and text extraction.
     "selectolax>=0.3.21",
+    # Step 4 (AI News Agent v2) — image decoding/compression for the media pipeline.
+    "Pillow>=10.3",
 ]
 
 [project.optional-dependencies]
