@@ -104,6 +104,87 @@ class FulltextPolicy(StrEnum):
     DISCOVERY_ONLY = "DISCOVERY_ONLY"
 
 
+class EditorialCategory(StrEnum):
+    """What kind of post this is, editorially — Step 3 (AI News Agent v2).
+
+    Deliberately a fourth taxonomy, not a rename of an existing one:
+
+    * ``ContentType`` (Phase 1) is a *format* split — NEWS (article-sourced) vs.
+      PROMPT/EXPLAINER/TESTED_USE_CASE/RESOURCE (editorial-original, from a
+      ``ContentItem``). Every value below is still article-sourced, i.e. still
+      ``ContentType.NEWS`` at that level — this is a finer split *within* it.
+    * ``Category`` (Phase 4, ``evaluations.category`` / ``draft_versions.category``) is
+      editorial *tone* (WOW, TRENDING, USEFUL_TOOL, ...), shown to readers and driving
+      the Telegram headline emoji. Orthogonal to this: a NEWS post can be any tone.
+    * ``ContentCapability`` (Step 2) is *source* metadata — what a source's items may
+      eventually feed into. This is what a specific post actually *is*, decided at
+      selection time, constrained by its source's ``ContentCapability`` list.
+
+    Every value here is still resolved through ``evaluations.editorial_category``,
+    which is deliberately unconstrained TEXT at the database level (see migration 014)
+    — this enum is where the real constraint lives, exactly like ``Category`` already
+    works.
+    """
+
+    NEWS = "NEWS"
+    AI_TOOL = "AI_TOOL"
+    FREE_DEAL = "FREE_DEAL"
+    AI_LIFEHACK = "AI_LIFEHACK"
+    PROMPT_WORKFLOW = "PROMPT_WORKFLOW"
+    EXPLAINER = "EXPLAINER"
+    RESEARCH = "RESEARCH"
+    #: Supported end to end (schema, validation, rendering) but never scheduled
+    #: automatically — see automation/pipeline.py and docs/editorial.md. A future step
+    #: decides publishing cadence; this step only makes the type real.
+    WEEKLY_DIGEST = "WEEKLY_DIGEST"
+
+
+class EditorialEvidence(StrEnum):
+    """What kind of evidence backs a post's claims — Step 3.
+
+    A different axis from the existing :class:`EvidenceKind` (Phase 8.1, "what act
+    produced a PROMPT's evidence" — OFFICIAL_TEST/THIRD_PARTY_DEMO/...): this classifies
+    the *source* behind an automated candidate's claims, not how a human-authored
+    prompt was tested. Named distinctly on purpose so the two are never confused.
+
+    The distinction ``AI_LIFEHACK`` exists to enforce: a Tier C community source can
+    supply ``USER_REPORTED`` or ``COMMUNITY_DISCUSSION`` evidence, never
+    ``PRIMARY_SOURCE`` — see ``sources.capability.allowed_evidence``. A post's evidence
+    type is what a validator checks before letting an anecdote read like a verified fact.
+    """
+
+    #: The vendor's own official statement — an OFFICIAL-tier source's own words.
+    PRIMARY_SOURCE = "PRIMARY_SOURCE"
+    #: Independent journalism reporting on something, not the thing itself.
+    REPUTABLE_SECONDARY = "REPUTABLE_SECONDARY"
+    #: One person's account of what happened to them. Never generalized into "AI does
+    #: X" — only "this person reports AI did X for them".
+    USER_REPORTED = "USER_REPORTED"
+    #: Community attention/reaction with no single identifiable claimant — a thread's
+    #: general reaction, not one person's story.
+    COMMUNITY_DISCUSSION = "COMMUNITY_DISCUSSION"
+    #: A named paper or research report, distinct from a company's own marketing
+    #: framing of that same result — see docs/editorial.md's RESEARCH claim framing.
+    RESEARCH_PAPER = "RESEARCH_PAPER"
+    #: An official pricing/product page — the source ``FREE_DEAL`` claims must resolve
+    #: to, not a secondary summary of one.
+    OFFICIAL_PRODUCT_PAGE = "OFFICIAL_PRODUCT_PAGE"
+
+
+class PromptOrigin(StrEnum):
+    """How a PROMPT_WORKFLOW post's prompt text relates to what the source actually
+    published — Step 3. Never inferred; a generator must state which one applies."""
+
+    #: The source published this exact prompt text. May be shown as a quote.
+    SOURCE_VERBATIM = "SOURCE_VERBATIM"
+    #: The source's prompt was reworded/clarified for readability. Must not be
+    #: presented as a direct quote.
+    SOURCE_ADAPTED = "SOURCE_ADAPTED"
+    #: The source describes a workflow or use case but no literal prompt text — what's
+    #: shown is derived from that description, not lifted from it.
+    WORKFLOW_DERIVED = "WORKFLOW_DERIVED"
+
+
 class FetchOutcome(StrEnum):
     """Result of one attempt to read a source.
 

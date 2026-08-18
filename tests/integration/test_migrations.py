@@ -9,6 +9,7 @@ import pytest
 
 from ai_news_editor.domain.errors import MigrationError
 from ai_news_editor.storage import db
+from tests.conftest import make_article, make_raw_item, make_source
 
 EXPECTED_TABLES = {
     "sources",
@@ -437,7 +438,7 @@ class TestMigration005:
     def test_fresh_install_reaches_the_latest_version(self, tmp_path: Path) -> None:
         conn = db.connect(tmp_path / "fresh5.sqlite3")
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert [m.version for m in applied] == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 
     def test_upgrade_from_a_phase_4_database(self, tmp_path: Path) -> None:
         staged = tmp_path / "upto_004"
@@ -452,7 +453,7 @@ class TestMigration005:
         assert db.schema_version(conn) == 4
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [5, 6, 7, 8, 9, 10, 11, 12, 13]
+        assert [m.version for m in applied] == [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
 
     def test_new_draft_columns_exist(self, connection: sqlite3.Connection) -> None:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(draft_versions)")}
@@ -512,7 +513,7 @@ class TestMigration006:
         assert db.schema_version(conn) == 5
 
         applied = db.migrate(conn)
-        assert [m.version for m in applied] == [6, 7, 8, 9, 10, 11, 12, 13]
+        assert [m.version for m in applied] == [6, 7, 8, 9, 10, 11, 12, 13, 14]
 
     def test_history_is_untouched(self) -> None:
         """001-005 are never edited; 006 adds a table and nothing else."""
@@ -570,3 +571,106 @@ class TestMigration006:
         assert "UNIQUE" in index
         assert "draft_version_id" in index and "channel" in index
         assert "SUCCEEDED" in index
+
+
+class TestMigration014:
+    """Step 3 (AI News Agent v2): editorial_category / evidence_type on evaluations.
+
+    Purely additive — same discipline as 008 and the deliberately-unconstrained
+    `category` columns from 004/007: two nullable columns, no CHECK, no table rebuild.
+    """
+
+    def test_upgrade_from_a_pre_014_database(self, tmp_path: Path) -> None:
+        staged = tmp_path / "upto_013"
+        staged.mkdir()
+        for name in sorted(p.name for p in db.MIGRATIONS_DIR.glob("0*.sql")):
+            if int(name[:3]) > 13:
+                continue
+            (staged / name).write_text(
+                (db.MIGRATIONS_DIR / name).read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        conn = db.connect(tmp_path / "upgrade14.sqlite3")
+        db.migrate(conn, staged)
+        assert db.schema_version(conn) == 13
+
+        # An evaluation created under the pre-014 schema, against a real article — the
+        # row this migration must not disturb.
+        from ai_news_editor.storage.repositories import (
+            ArticleRepository,
+            RawItemRepository,
+            SourceRepository,
+        )
+
+        sources_repo = SourceRepository(conn)
+        source = sources_repo.upsert(make_source())
+        item = RawItemRepository(conn).add(make_raw_item(source.id))
+        article = ArticleRepository(conn).add(make_article(item.id, source.id))
+
+        conn.execute(
+            "INSERT INTO evaluations (id, article_id, schema_version, rubric_version, "
+            "evaluator_type, content_fingerprint, decision, category, audience, "
+            "credibility, general_ai_relevance, reader_interest, usefulness, novelty, "
+            "wow_factor, virality_potential, accessibility, consumer_impact, "
+            "composite_score, verification_status, created_at) "
+            "VALUES ('pre014', ?, '1', '1', 'AUTOMATED', 'fp', 'SHORTLIST', "
+            "'PRODUCT_UPDATE', 'NEWCOMER', 90, 90, 90, 90, 90, 90, 90, 90, 90, 90.0, "
+            "'NOT_REQUIRED', 'now')",
+            (str(article.id),),
+        )
+
+        applied = db.migrate(conn)
+        assert [m.version for m in applied] == [14]
+        assert db.schema_version(conn) == 14
+
+        row = conn.execute(
+            "SELECT category, editorial_category, evidence_type FROM evaluations "
+            "WHERE id = 'pre014'"
+        ).fetchone()
+        assert row["category"] == "PRODUCT_UPDATE"  # untouched
+        assert row["editorial_category"] is None  # new column, no data loss, no guess
+        assert row["evidence_type"] is None
+
+    def test_history_is_untouched(self) -> None:
+        """001-013 are never edited; 014 adds two nullable columns and an index."""
+        text = (db.MIGRATIONS_DIR / "014_editorial_classification.sql").read_text(
+            encoding="utf-8"
+        ).lower()
+        assert "alter table evaluations add column editorial_category" in text
+        assert "alter table evaluations add column evidence_type" in text
+        for forbidden in ("drop table", "drop column", "drop trigger", "drop index",
+                           "alter table drafts", "alter table draft_versions"):
+            assert forbidden not in text
+
+    def test_new_columns_exist_and_accept_any_string(
+        self, connection: sqlite3.Connection, seeded_article
+    ) -> None:
+        """Deliberately unconstrained, matching `category`'s own precedent — Pydantic
+        enforces the enum, the database does not need to."""
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(evaluations)")}
+        assert {"editorial_category", "evidence_type"} <= columns
+
+        connection.execute(
+            "INSERT INTO evaluations (id, article_id, schema_version, rubric_version, "
+            "evaluator_type, content_fingerprint, decision, category, audience, "
+            "credibility, general_ai_relevance, reader_interest, usefulness, novelty, "
+            "wow_factor, virality_potential, accessibility, consumer_impact, "
+            "composite_score, verification_status, editorial_category, evidence_type, "
+            "created_at) "
+            "VALUES ('e2', ?, '1', '1', 'AUTOMATED', 'fp2', 'SHORTLIST', 'PRODUCT_UPDATE', "
+            "'NEWCOMER', 90, 90, 90, 90, 90, 90, 90, 90, 90, 90.0, 'NOT_REQUIRED', "
+            "'AI_LIFEHACK', 'USER_REPORTED', 'now')",
+            (str(seeded_article.id),),
+        )
+        row = connection.execute(
+            "SELECT editorial_category, evidence_type FROM evaluations WHERE id = 'e2'"
+        ).fetchone()
+        assert row["editorial_category"] == "AI_LIFEHACK"
+        assert row["evidence_type"] == "USER_REPORTED"
+
+    def test_editorial_category_index_exists(self, connection: sqlite3.Connection) -> None:
+        index = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_evaluations_editorial_category'"
+        ).fetchone()
+        assert index is not None

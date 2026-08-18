@@ -42,9 +42,10 @@ class EvaluationRepository:
                                      decision, category, audience, {_SCORE_COLUMNS},
                                      composite_score, verification_status,
                                      verification_sources_json, why_selected_json,
-                                     editorial_angle, notes, created_at)
+                                     editorial_angle, notes, editorial_category,
+                                     evidence_type, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, {_SCORE_PLACEHOLDERS},
-                    ?, ?, ?, ?, ?, ?, ?)
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,  # noqa: S608 - column names come from a module constant, never user input
             (
                 str(evaluation.id),
@@ -65,6 +66,8 @@ class EvaluationRepository:
                 json.dumps(list(evaluation.why_selected), ensure_ascii=False),
                 evaluation.editorial_angle,
                 evaluation.notes,
+                evaluation.editorial_category.value if evaluation.editorial_category else None,
+                evaluation.evidence_type.value if evaluation.evidence_type else None,
                 to_iso(evaluation.created_at),
             ),
         )
