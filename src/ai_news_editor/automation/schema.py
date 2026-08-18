@@ -30,6 +30,8 @@ from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ai_news_editor.domain.enums import EditorialCategory, EditorialEvidence
+
 NonEmpty = Annotated[str, Field(min_length=1, max_length=4000)]
 
 #: How many claims a generated post may cite. Enough for a real news item; a number this
@@ -167,10 +169,46 @@ class GeneratedPost(StrictModel):
         return self.rejection_reason is not None
 
 
+# --- outbound: editorial classification (Step 3, additive) --------------------------
+
+
+class ClassificationResult(StrictModel):
+    """Gemini's editorial classification of one candidate: its content type and the
+    strength of evidence behind it — both constrained to the exact enum members of
+    :class:`~domain.enums.EditorialCategory` / :class:`~domain.enums.EditorialEvidence`
+    by pydantic *and* by the response schema in :mod:`automation.classification`, so
+    Gemini cannot invent an arbitrary type string even if it tried.
+
+    Additive to the two schemas above: nothing in :func:`automation.provider
+    .select_candidate` or ``generate_post`` reads this model, and this model is never
+    produced by those calls. See :mod:`automation.classification` for the (also new,
+    also unwired) call that produces one.
+    """
+
+    content_type: EditorialCategory | None = None
+    evidence_type: EditorialEvidence | None = None
+    reason: NonEmpty | None = None
+    rejection_reason: NonEmpty | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_outcome(self) -> Self:
+        if (self.content_type is None) != (self.evidence_type is None):
+            raise ValueError("content_type and evidence_type must be set together, or not at all")
+        classified = self.content_type is not None
+        rejected = self.rejection_reason is not None
+        if classified == rejected:
+            raise ValueError(
+                "a classification must set content_type/evidence_type, or "
+                "rejection_reason, never both and never neither"
+            )
+        return self
+
+
 __all__ = [
     "MAX_FACTUAL_CLAIMS",
     "MAX_HEADLINE_CHARS",
     "MAX_SELECTION_CANDIDATES",
+    "ClassificationResult",
     "GeneratedPost",
     "GenerationRequest",
     "SelectionCandidate",
