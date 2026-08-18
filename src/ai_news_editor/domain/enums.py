@@ -185,6 +185,32 @@ class PromptOrigin(StrEnum):
     WORKFLOW_DERIVED = "WORKFLOW_DERIVED"
 
 
+class FreeDealKind(StrEnum):
+    """What kind of "free" a FREE_DEAL post is actually reporting — Step 5.
+
+    ``editorial.safety.validate_free_deal`` already requires explicit evidence before
+    a post may be classified FREE_DEAL at all; this enum is the next layer, read by
+    the renderer, so a post never collapses six different offers into one vague word.
+    A free *trial* rendered as if it were free forever is exactly the kind of
+    factual drift this taxonomy exists to prevent.
+    """
+
+    #: No cost, no stated time limit or trial framing.
+    FREE = "FREE"
+    #: A tier of an otherwise-paid product that stays free indefinitely, alongside
+    #: paid tiers with more capability.
+    FREE_TIER = "FREE_TIER"
+    #: Free for a stated period or usage amount, then billing starts.
+    FREE_TRIAL = "FREE_TRIAL"
+    #: Source code (or model weights) released under an open license — says nothing
+    #: about whether a *hosted* version of the same thing is free to use.
+    OPEN_SOURCE = "OPEN_SOURCE"
+    #: A limited-time price cut or bundled offer, not an ongoing free option.
+    PROMOTION = "PROMOTION"
+    #: A reduced but still non-zero price.
+    DISCOUNT = "DISCOUNT"
+
+
 class FetchOutcome(StrEnum):
     """Result of one attempt to read a source.
 
