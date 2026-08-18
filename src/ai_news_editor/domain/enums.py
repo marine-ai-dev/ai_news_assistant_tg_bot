@@ -562,6 +562,9 @@ class MediaRole(StrEnum):
     SOURCE_SCREENSHOT = "SOURCE_SCREENSHOT"
     INFOGRAPHIC = "INFOGRAPHIC"
     PDF = "PDF"
+    #: Step 4 (AI News Agent v2). A processed, Telegram-safe MP4 — never a source's own
+    #: unprocessed video (see MediaOrigin.SOURCE_MEDIA and publishable_media()).
+    VIDEO = "VIDEO"
     OTHER = "OTHER"
 
 
