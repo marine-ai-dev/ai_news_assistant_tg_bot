@@ -32,6 +32,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
+from ai_news_editor.automation import test_history
 from ai_news_editor.automation.gemini import GeminiClient, GeminiError
 from ai_news_editor.automation.provider import (
     DEFAULT_CONFIDENCE_THRESHOLD,
@@ -42,6 +43,7 @@ from ai_news_editor.automation.provider import (
     select_candidate,
 )
 from ai_news_editor.automation.schema import MAX_SELECTION_CANDIDATES, SelectionCandidate
+from ai_news_editor.automation.test_history import DEFAULT_FILENAME as TEST_HISTORY_FILENAME
 from ai_news_editor.domain.clock import now_utc
 from ai_news_editor.domain.enums import (
     ArticleStatus,
@@ -84,6 +86,7 @@ from ai_news_editor.storage.repositories import (
     SourceRepository,
 )
 from ai_news_editor.writing.export import eligibility_problem
+from ai_news_editor.writing.format import has_any_markup
 from ai_news_editor.writing.import_results import DraftImportError, import_drafts
 from ai_news_editor.writing.schema import (
     STYLE_VERSION,
@@ -365,8 +368,17 @@ def _run_pipeline(
     # seeded database with no HTTP mocking for feed collection at all.
 
     # 5. Build the eligible candidate list: NORMALIZED, from an OFFICIAL source, not
-    # already drafted, not already evaluated by anyone (human or automated).
-    candidates, by_id = _eligible_candidates(connection)
+    # already drafted, not already evaluated by anyone (human or automated). Test mode
+    # additionally excludes anything the dedicated test-history file already recorded
+    # as sent — see automation.test_history's module docstring for why the canonical
+    # database (which this exclusion never touches) cannot do that job on its own.
+    test_history_path = settings.data_dir / TEST_HISTORY_FILENAME
+    exclude_urls: frozenset[str] = frozenset()
+    if mode == "test":
+        exclude_urls = frozenset(
+            entry.source_url for entry in test_history.load(test_history_path)
+        )
+    candidates, by_id = _eligible_candidates(connection, exclude_urls=exclude_urls)
     if not candidates:
         return AutomationResult(
             Outcome.NO_CANDIDATE, "no eligible NEWS candidate from an official source."
@@ -468,6 +480,14 @@ def _run_pipeline(
             "mode": mode,
         },
     )
+    if mode == "test":
+        # Recorded only now, after a real send succeeded — never speculatively, and
+        # never into the canonical database (see the module docstring in
+        # automation.test_history for why this file exists at all).
+        test_history.record(
+            test_history_path, source_url=article.canonical_url,
+            message_id=publication.message_id,
+        )
     return AutomationResult(
         Outcome.PUBLISHED,
         f"published to {target_channel}.",
@@ -580,12 +600,17 @@ def _attempt_candidates(
 
 
 def _eligible_candidates(
-    connection,
+    connection, *, exclude_urls: frozenset[str] = frozenset()
 ) -> tuple[list[SelectionCandidate], dict[str, Article]]:
     """NORMALIZED articles from an OFFICIAL source, not already drafted or evaluated.
 
     Bounded to CANDIDATE_LIMIT and ordered newest-first, matching the selection
     prompt's own instruction to favour recent stories.
+
+    ``exclude_urls`` is how test-only dedup (see ``automation.test_history``) keeps a
+    story already sent to the test channel from being offered to Gemini again on a
+    later ``--test`` run. Always empty for ``"dry-run"`` and ``"live"`` — production
+    eligibility must never depend on what a test run happened to send.
     """
     articles_repo = ArticleRepository(connection)
     sources_repo = SourceRepository(connection)
@@ -607,6 +632,8 @@ def _eligible_candidates(
         if drafts_repo.find_by_article(article.id) is not None:
             continue
         if evaluations_repo.latest_for_article(article.id) is not None:
+            continue
+        if article.canonical_url in exclude_urls:
             continue
 
         candidate_id = str(len(candidates) + 1)
@@ -689,6 +716,17 @@ def _validate_post(connection, article: Article, post, *, run_id: str) -> _Valid
     )
     if problem:
         raise DraftImportError([f"article {article.id}: {problem}"])
+
+    # Gemini must never control Telegram markup — bold, emoji and the source hyperlink
+    # are entirely this renderer's decision (writing.format.render_post), never the
+    # model's. DraftResult's own validator (disallowed_tags) only rejects tags outside
+    # the human-writer-permitted subset; this is the stricter, automation-only check
+    # that rejects *any* tag at all, checked before that subset even applies.
+    for field_name, text in (("headline", post.headline or ""), ("body", post.body or "")):
+        if has_any_markup(text):
+            raise DraftImportError(
+                [f"generated {field_name} contains markup, which automation must not produce"]
+            )
 
     # DraftResult's own validator runs on construction: URL safety, blank text,
     # disallowed markup, the Telegram length limit. A ValidationError here is exactly

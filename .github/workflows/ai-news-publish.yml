@@ -185,12 +185,71 @@ jobs:
 
           git commit -m "chore(automation): persist AI news state (run ${{ github.run_id }})"
 
+          # Telegram has already been sent by this point (see steps.run above) — this
+          # push is the only thing standing between that and the next scheduled run
+          # knowing about it (see docs/safety.md § live post-send duplicate risk).
+          # Retried harder than a normal git push because of that: 5 attempts with
+          # exponential backoff, not the 3-attempt fixed backoff a routine push would
+          # get, since failing here risks a real duplicate post, not just a rerun.
+          attempt=0
+          until git pull --rebase --autostash origin "${{ github.ref_name }}" \
+              && git push origin "HEAD:${{ github.ref_name }}"; do
+            attempt=$((attempt + 1))
+            if [ "$attempt" -ge 5 ]; then
+              echo "::error::Failed to push automation state after $attempt attempts. " \
+                   "A post WAS already sent to the production channel this run, but " \
+                   "the record of it did not make it back to main — the next scheduled " \
+                   "run may not know this story was already published and could select " \
+                   "it again. Resolve by hand before the next scheduled run: pull this " \
+                   "runner's automation_state/ai_news.sqlite3 (see the run's artifacts/logs) " \
+                   "or otherwise confirm main reflects this run's publication before " \
+                   "AI_NEWS_AUTOMATION_ENABLED fires again."
+              exit 1
+            fi
+            sleep $((2 ** attempt))
+          done
+
+      - name: Persist test-channel history
+        # A --test run's real Telegram send is the only lasting effect it has (see the
+        # comment on the step above — everything else lives only in an in-memory copy
+        # of the database and is discarded on purpose). Without this, two independent
+        # --test runs can offer Gemini the same story twice and post it to the test
+        # channel twice, since neither run has any memory of the other. This is TEST
+        # STATE ONLY: automation_state/test_publish_history.json, nothing else — it
+        # never touches ai_news.sqlite3 and has no bearing on production eligibility,
+        # the daily limit, or dedup (see automation/test_history.py's module docstring).
+        if: ${{ steps.mode.outputs.mode == 'test' && steps.run.outputs.outcome == 'PUBLISHED' }}
+        run: |
+          set -euo pipefail
+          HISTORY_PATH="automation_state/test_publish_history.json"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -f "$HISTORY_PATH"
+
+          if git diff --cached --quiet; then
+            echo "No test-channel history changes to commit."
+            exit 0
+          fi
+
+          unexpected="$(git status --short | grep -v -F "$HISTORY_PATH" || true)"
+          if [ -n "$unexpected" ]; then
+            echo "::error::Unexpected tracked changes outside $HISTORY_PATH:"
+            echo "$unexpected"
+            exit 1
+          fi
+
+          git commit -m "chore(automation): persist TEST channel history (run ${{ github.run_id }})"
+
           attempt=0
           until git pull --rebase --autostash origin "${{ github.ref_name }}" \
               && git push origin "HEAD:${{ github.ref_name }}"; do
             attempt=$((attempt + 1))
             if [ "$attempt" -ge 3 ]; then
-              echo "::error::Failed to push automation state after $attempt attempts."
+              echo "::error::Failed to push test-channel history after $attempt attempts. " \
+                   "Not production-critical — worst case, a later --test run may repeat " \
+                   "this same story once."
               exit 1
             fi
             sleep $((attempt * 5))
@@ -203,3 +262,4 @@ jobs:
           echo "Automation outcome: ${{ steps.run.outputs.outcome }}"
           echo "Run automation step result: ${{ steps.run.outcome }}"
           echo "State persisted: ${{ steps.mode.outputs.mode == 'live' && steps.run.outputs.outcome == 'PUBLISHED' }}"
+          echo "Test history persisted: ${{ steps.mode.outputs.mode == 'test' && steps.run.outputs.outcome == 'PUBLISHED' }}"

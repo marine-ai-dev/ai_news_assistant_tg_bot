@@ -142,6 +142,32 @@ CREATE UNIQUE INDEX idx_publications_one_success_per_destination
 Failed and uncertain attempts remain recordable — they are expected to repeat. Only
 success is constrained.
 
+**This protects one `draft_version_id` from ever reaching a channel twice. It does not
+protect one real-world story from getting a *second, independent* `Draft` if the
+automated pipeline's canonical database forgets it already wrote about that story once.**
+That forgetting has one specific cause worth naming: `automation_state/ai_news.sqlite3`
+is committed back to `main` by a separate GitHub Actions step, *after* the Telegram send
+already succeeded (see the workflow's own comment on that step). If that push fails —
+after its retries are exhausted — the send that already happened is not the problem the
+unique index above exists to prevent; what the next scheduled run does with a stale
+checkout is. Concretely: it starts over from `main`'s last successfully-persisted state,
+re-collects the same official feeds, and if the just-published story still looks eligible
+(no `Draft` row for its article, because that commit never landed), it can be selected
+and published again — a second `Draft`, a second `Publication` row, a second real message.
+
+**Live post-send duplicate risk: yes, narrow.** It needs two independent failures in the
+same window — the git push exhausting every retry, *and* the same story still being the
+best candidate on the next run — not a plain infrastructure hiccup. The mitigation is
+proportionate to that: the persist step retries harder (5 attempts, exponential backoff)
+specifically because failing here is not "rerun the workflow," it is "the channel may get
+a duplicate," and its failure message says exactly that rather than a generic push error.
+There is no smaller fix that removes the risk outright without either making the
+Telegram send and the git commit one atomic operation (a materially bigger change to how
+this project separates "talk to Telegram" from "talk to GitHub") or querying the channel
+itself before every send (an extra, fragile Telegram round trip this project has
+otherwise avoided). Both were considered and set aside as disproportionate to a risk this
+narrow.
+
 ---
 
 ## 10. 🧩 Partial success is recorded, not smoothed over

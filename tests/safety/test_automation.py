@@ -1889,3 +1889,188 @@ class TestCandidateFallback:
         assert result.outcome is Outcome.PUBLISHED, result.detail
         assert len(gemini.calls) == 2  # type: ignore[attr-defined]
         assert PublicationRepository(connection).count() == 1
+
+
+class TestGeneratedMarkupIsRejected:
+    """Gemini must never control Telegram markup — see writing.format.has_any_markup.
+    A generated headline or body containing any tag at all is a candidate-specific
+    rejection, exactly like a bad fulltext fetch or an incomplete generation."""
+
+    def test_a_markup_headline_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {
+            **VALID_GENERATION,
+            "source_url": article.canonical_url,
+            "headline": "<b>Важлива новина</b>",
+        }
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="live")
+        # Only one candidate was seeded — exhausted, not published.
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert "markup" in result.detail
+        assert PublicationRepository(connection).count() == 0
+
+    def test_a_markup_body_is_rejected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {
+            **VALID_GENERATION,
+            "source_url": article.canonical_url,
+            "body": 'Прочитайте більше на <a href="https://evil.invalid">цій сторінці</a>.',
+        }
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="live")
+        assert result.outcome is Outcome.CANDIDATES_EXHAUSTED
+        assert "markup" in result.detail
+        assert PublicationRepository(connection).count() == 0
+
+    def test_plain_headline_and_body_are_unaffected(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A bare '<' that is not a tag (e.g. a comparison) must not be misread as
+        markup and reject a perfectly good post."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {
+            **VALID_GENERATION,
+            "source_url": article.canonical_url,
+            "body": "Нова модель швидша (n < 5 секунд) та дешевша.",
+        }
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"}, generation=generation
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="live")
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+
+
+class TestTestOnlyDedup:
+    """A source already sent to the test channel must not be offered to Gemini again
+    on a later, independent --test run — see automation.test_history."""
+
+    def test_a_source_already_test_published_is_excluded_from_a_later_run(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        x_url = "https://x.invalid/story"
+        y_url = "https://y.invalid/story"
+        settings = build_settings(tmp_path)
+
+        # Run 1: only X exists. Gemini selects and publishes it to the test channel.
+        connection1 = db(tmp_path / "run1")
+        seed_official_article(connection1, url=x_url)
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": x_url},
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result1 = run_automation(connection1, settings, mode="test")
+        assert result1.outcome is Outcome.PUBLISHED, result1.detail
+
+        history_path = settings.data_dir / "test_publish_history.json"
+        assert history_path.exists()
+        assert x_url in history_path.read_text()
+
+        # Run 2: a genuinely fresh database — no draft, no evaluation, nothing that
+        # would exclude X on its own — sees X (re-collected, as RSS would still show
+        # it) alongside a new story Y. X must never reach Gemini: the test-history
+        # file is the only thing standing between it and being offered again.
+        connection2 = db(tmp_path / "run2")
+        seed_official_article(connection2, url=x_url)
+        seed_official_article(connection2, url=y_url)
+
+        gemini2 = fake_gemini_transport(
+            selection={"selected_id": "1"},
+            generation={**VALID_GENERATION, "source_url": y_url},
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=gemini2, telegram_transport=fake_telegram_transport()
+        )
+        result2 = run_automation(connection2, settings, mode="test")
+
+        assert result2.outcome is Outcome.PUBLISHED, result2.detail
+        assert result2.detail  # sanity
+        calls_text = json.dumps(gemini2.calls)  # type: ignore[attr-defined]
+        assert x_url not in calls_text
+        assert y_url in calls_text
+
+    def test_the_recorded_entry_carries_the_real_message_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Recorded only from the real send outcome — never speculatively."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": article.canonical_url},
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="test")
+        assert result.outcome is Outcome.PUBLISHED
+
+        from ai_news_editor.automation.test_history import load
+
+        entries = load(settings.data_dir / "test_publish_history.json")
+        assert len(entries) == 1
+        assert entries[0].source_url == article.canonical_url
+        assert entries[0].telegram_message_id == result.message_id
+
+    def test_live_may_still_publish_a_url_present_in_test_history(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Test-channel history is test-only. It must never become a reason a live
+        run refuses a story it has never actually published."""
+        url = "https://z.invalid/story"
+        settings = build_settings(tmp_path)
+        test_history_path = settings.data_dir / "test_publish_history.json"
+        test_history_path.parent.mkdir(parents=True, exist_ok=True)
+        test_history_path.write_text(
+            json.dumps({"entries": [
+                {"source_url": url, "published_at": "2026-01-01T00:00:00+00:00",
+                 "telegram_message_id": 1},
+            ]}),
+            encoding="utf-8",
+        )
+
+        connection = db(tmp_path)
+        seed_official_article(connection, url=url)
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": url},
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        result = run_automation(connection, settings, mode="live")
+        assert result.outcome is Outcome.PUBLISHED, result.detail
+        assert result.channel == settings.telegram_channel
