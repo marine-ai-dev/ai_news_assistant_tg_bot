@@ -36,6 +36,7 @@ from ai_news_editor.automation.pipeline import (
     run_automation,
     run_pass,
 )
+from ai_news_editor.automation.provider import _GENERATION_RESPONSE_SCHEMA
 from ai_news_editor.domain.enums import (
     ArticleStatus,
     DraftStatus,
@@ -872,6 +873,101 @@ class TestFailClosedPaths:
         result = run_automation(connection, settings, mode="live")
         assert result.outcome is Outcome.PUBLISHED
         assert result.channel == settings.telegram_channel
+
+
+class TestGenerationSchemaContract:
+    """The regression test for the actual production bug: two real GitHub Actions runs
+    hit a Gemini generation response that was syntactically valid JSON but simply
+    omitted the body and confidence keys. generate_post() now catches that safely
+    (see TestFailClosedPaths), but the schema sent to Gemini is also now stricter, so
+    the model is structurally required to include those keys at all — these tests
+    prove the actual outbound request, not just the local fallback."""
+
+    def test_the_generation_request_asks_for_structured_json_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        transport = fake_gemini_transport(
+            selection={"selected_id": "1"}, generation=generation
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=transport, telegram_transport=fake_telegram_transport()
+        )
+
+        run_automation(connection, settings, mode="live")
+
+        generation_request = transport.calls[1]  # type: ignore[attr-defined]
+        config = generation_request["generationConfig"]
+        assert config["responseMimeType"] == "application/json"
+        assert config["responseSchema"] == _GENERATION_RESPONSE_SCHEMA
+
+    def test_body_and_confidence_are_actually_required_keys_in_the_outbound_schema(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The exact fix: these two keys are what a real Gemini response omitted
+        twice. 'required' in JSON Schema means the key must be present — independent
+        of 'nullable', which still lets its value be null for a rejection."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        transport = fake_gemini_transport(
+            selection={"selected_id": "1"}, generation=generation
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=transport, telegram_transport=fake_telegram_transport()
+        )
+
+        run_automation(connection, settings, mode="live")
+
+        generation_request = transport.calls[1]  # type: ignore[attr-defined]
+        required = generation_request["generationConfig"]["responseSchema"]["required"]
+        assert "body" in required
+        assert "confidence" in required
+        assert "headline" in required
+        assert "source_url" in required
+        assert "rejection_reason" in required
+
+    def test_the_required_fields_stay_nullable_so_a_rejection_needs_no_fake_content(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Required and nullable are not in tension: a rejection can still validly
+        answer every required key with null, which is exactly what it should do."""
+        connection = db(tmp_path)
+        article = seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        generation = {**VALID_GENERATION, "source_url": article.canonical_url}
+        transport = fake_gemini_transport(
+            selection={"selected_id": "1"}, generation=generation
+        )
+        patch_clients(
+            monkeypatch, gemini_transport=transport, telegram_transport=fake_telegram_transport()
+        )
+
+        run_automation(connection, settings, mode="live")
+
+        properties = transport.calls[1]["generationConfig"]["responseSchema"]["properties"]  # type: ignore[attr-defined]
+        for field in ("headline", "body", "source_url", "confidence", "rejection_reason"):
+            assert properties[field].get("nullable") is True, field
+
+    def test_the_selection_schema_is_left_alone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Selection has never failed in real use — this fix is scoped to
+        generation, the schema that actually broke."""
+        connection = db(tmp_path)
+        seed_official_article(connection)
+        settings = build_settings(tmp_path)
+        transport = fake_gemini_transport(selection={"rejection_reason": "nothing today"})
+        patch_clients(monkeypatch, gemini_transport=transport, telegram_transport=None)
+
+        run_automation(connection, settings, mode="live")
+
+        selection_request = transport.calls[0]  # type: ignore[attr-defined]
+        assert selection_request["generationConfig"]["responseSchema"]["required"] == []
 
 
 class TestSuccessfulPublication:

@@ -81,6 +81,13 @@ news post — if it is too vague, too short, or mostly marketing language with n
 news in it — you MUST return a rejection instead of writing something anyway. A
 rejection is a normal, successful outcome, not a failure.
 
+The response schema requires every field's key to be present in both cases — a
+rejection means setting headline, body, source_url and confidence to null and stating
+your reason in rejection_reason; writing a post means the opposite: rejection_reason is
+null and the other four are genuinely filled in. Never leave a field's key out, and
+never fill headline or body with a placeholder just to satisfy this — null is the
+correct value when you are rejecting.
+
 List the specific factual claims your post rests on as short, separate statements, each
 one traceable to a sentence in the supplied article. State your own confidence, from 0
 to 100, that every sentence in your post is directly supported by the article text —
@@ -116,7 +123,21 @@ _GENERATION_RESPONSE_SCHEMA: dict[str, object] = {
         "confidence": {"type": "INTEGER", "nullable": True},
         "rejection_reason": {"type": "STRING", "nullable": True},
     },
-    "required": ["content_type"],
+    # Every field but content_type is nullable — that part hasn't changed, and it's
+    # still what lets a rejection response validly answer with no post content at all.
+    # What changed is that all of them are now required too: "required" in JSON Schema
+    # means the *key* must be present, entirely independent of "nullable" allowing its
+    # *value* to be null — so this closes the exact bug two real GitHub Actions runs
+    # hit (Gemini returning syntactically valid JSON that simply omitted the body and
+    # confidence keys) without forcing a rejection to carry fake post content, and
+    # without needing an untested anyOf/discriminated-union schema shape (Gemini's
+    # docs describe two schema dialects across two different endpoints — this project
+    # calls generateContent, whose Schema object is the one already proven, by every
+    # real call this pipeline has made, to honor `required` and `nullable` exactly as
+    # used here; switching schema dialects on unverified footing was the greater risk).
+    "required": [
+        "content_type", "headline", "body", "source_url", "confidence", "rejection_reason",
+    ],
 }
 
 
