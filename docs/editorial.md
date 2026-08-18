@@ -196,7 +196,13 @@ still selects and writes `NEWS` only, from `TrustTier.OFFICIAL` sources, via
 `automation.provider.select_candidate`/`generate_post`. Everything in this document —
 the classification schema (`automation/classification.py`), the capability and safety
 validators, the diversity ranking, primary-source preference, and the preview command —
-is additive, tested, and not wired into that live call. `DraftResult`
-(`writing/schema.py`) is still structurally NEWS-only by design (`article_id` required,
-no `content_type` field), so widening the live pipeline to the other seven categories
-is a deliberately separate, later step.
+was additive and unwired as of Step 3.
+
+**Step 5 wires this taxonomy into a new, parallel pipeline** — `automation/pipeline_v2.py`
+— that actually uses `sources.capability`/`editorial.diversity`/`editorial.primary_source`
+to select a candidate, then `automation/classification.py` (skipped when a candidate is
+already classified) and `automation/generation_v2.py` to write it, bounded to at most 2
+Gemini calls per successful post. This is still **not** `automation.pipeline`'s live
+entrypoint: `pipeline_v2.run_pipeline_v2` is a new, additive orchestration function, not
+yet the unattended cron path. See `docs/style.md` for how its output is rendered, and
+`docs/media.md` for how media is attached.

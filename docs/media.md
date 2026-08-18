@@ -192,10 +192,21 @@ failed to download.
 ## Copyright principle
 
 Discovering a URL is not a license to republish it. The default (`NO_MEDIA`) assumes
-nothing may be reused. `DISCOVER_MEDIA` lets this pipeline process a candidate into a
-file, but that is where Step 4 stops — nothing here attaches a processed source image
-or video to an actual publication; `publishing/plan.py` still only ever sends media a
-human approved as part of a draft version, and still excludes `MediaOrigin.SOURCE_MEDIA`
-outright. Wiring a discovered/processed source image into an actual approved post is a
-deliberately separate decision for a later step, not something this pipeline does on
-its own. "It's on the official website" is never, by itself, treated as permission.
+nothing may be reused — and that gate is checked once, in `media.pipeline.select_media`,
+before any download is even attempted. Everything downstream of a successful
+`MediaOutcome` treats that gate as already having run; it is never re-decided or
+weakened later just because a renderer would look better with an image.
+
+**Step 4** stopped at producing a processed file: nothing wired that file into an
+actual publication, and the human-approval draft flow's `publishing/plan.py` still
+excludes `MediaOrigin.SOURCE_MEDIA` from `publishable_media()` outright — correct for
+that flow, where `SOURCE_MEDIA` means "a bare URL reference," not something downloaded.
+
+**Step 5** is the step that actually attaches it: `rendering/plan.py` builds a
+`Step`/`MediaAsset` directly from a `ProcessedMedia` result, for the new
+`pipeline_v2`-generated post path only — never for the human-approval draft flow, whose
+own exclusion is untouched. This is safe specifically because the media only ever
+reaches `rendering/plan.py` after `media.pipeline.select_media`'s own policy gate
+already passed (`DISCOVER_MEDIA`/`EXPLICIT_REUSE_ALLOWED`) — "it's on the official
+website" is still never, by itself, treated as permission; only an explicit registry
+policy is.
