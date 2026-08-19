@@ -65,11 +65,16 @@ class TestModeSelection:
             "dry-run", "test", "live", "telegram-doctor", "telegram-doctor-live",
         }
 
-    def test_schedule_runs_monday_through_friday(self, workflow: dict[str, Any]) -> None:
-        crons = [entry["cron"] for entry in workflow[True]["schedule"]]
-        assert len(crons) == 1
-        _minute, _hour, _dom, _month, dow = crons[0].split()
-        assert dow == "1-5"
+    def test_schedule_runs_four_times_daily_every_day_in_kyiv_time(
+        self, workflow: dict[str, Any]
+    ) -> None:
+        entries = workflow[True]["schedule"]
+        assert len(entries) == 1
+        minute, hour, _dom, _month, dow = entries[0]["cron"].split()
+        assert minute == "0"
+        assert set(hour.split(",")) == {"10", "13", "16", "19"}
+        assert dow == "*"
+        assert entries[0]["timezone"] == "Europe/Kyiv"
 
     def test_resolve_mode_step_never_reads_inputs_outside_the_dispatch_guard(
         self, workflow: dict[str, Any]
