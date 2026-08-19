@@ -337,3 +337,56 @@ class TestHypeDetection:
     def test_ordinary_text_has_no_hype_warning(self) -> None:
         rendered = render_editorial_post(_content())
         assert not any("hype" in w for w in rendered.warnings)
+
+
+class TestOrdinaryCategoriesStayShort:
+    """Step 6B: the generation contract itself caps body blocks and detail bullets for
+    ordinary categories — enforced at construction, not by the renderer truncating."""
+
+    def test_an_ordinary_category_with_four_body_blocks_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="at most 3 body blocks"):
+            _content(
+                body=(
+                    BodyBlock(purpose="what_happened", text="Раз."),
+                    BodyBlock(purpose="why_it_matters", text="Два."),
+                    BodyBlock(purpose="availability", text="Три."),
+                    BodyBlock(purpose="who_its_for", text="Чотири."),
+                )
+            )
+
+    def test_an_ordinary_category_with_three_detail_bullets_is_refused(self) -> None:
+        with pytest.raises(ValidationError, match="at most 2 detail bullets"):
+            _content(detail_bullets=("Один", "Два", "Три"))
+
+    def test_an_ordinary_category_at_exactly_the_cap_is_accepted(self) -> None:
+        content = _content(
+            body=(
+                BodyBlock(purpose="what_happened", text="Раз."),
+                BodyBlock(purpose="why_it_matters", text="Два."),
+                BodyBlock(purpose="availability", text="Три."),
+            ),
+            detail_bullets=("Один", "Два"),
+        )
+        assert len(content.body) == 3
+        assert len(content.detail_bullets) == 2
+
+    def test_a_wide_category_may_exceed_the_ordinary_body_block_cap(self) -> None:
+        content = _content(
+            category=EditorialCategory.RESEARCH,
+            evidence=EditorialEvidence.RESEARCH_PAPER,
+            body=(
+                BodyBlock(purpose="what_was_tested", text="Раз."),
+                BodyBlock(purpose="what_was_found", text="Два."),
+                BodyBlock(purpose="limitation", text="Три."),
+                BodyBlock(purpose="why_interesting", text="Чотири."),
+            ),
+            research_framing=ResearchClaimFraming.PAPER_RESULT,
+        )
+        assert len(content.body) == 4
+
+    def test_a_wide_category_may_exceed_the_ordinary_detail_bullet_cap(self) -> None:
+        content = _content(
+            category=EditorialCategory.EXPLAINER,
+            detail_bullets=("Один", "Два", "Три", "Чотири"),
+        )
+        assert len(content.detail_bullets) == 4

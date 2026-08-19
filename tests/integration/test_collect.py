@@ -30,6 +30,7 @@ TWO_SOURCES = {
             "editorial_role": "Primary test source.",
             "priority": "PRIMARY_NORMAL",
             "content_types": ["NEWS"],
+            "publisher_region": "UNITED_STATES",
         },
         {
             "id": "beta",
@@ -40,6 +41,7 @@ TWO_SOURCES = {
             "editorial_role": "Secondary test source.",
             "priority": "DISCOVERY",
             "content_types": ["NEWS"],
+            "publisher_region": "UNITED_STATES",
         },
     ],
 }

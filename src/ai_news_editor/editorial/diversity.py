@@ -49,6 +49,18 @@ class DiversityWeights:
     #: penalizing a candidate as hard as "last 5 posts were all NEWS."
     lookback: int = 3
 
+    #: Step 6B: a source-family diversity nudge stronger than the unanimous-window
+    #: check above — this one fires on the single most recent post alone, so back-to-
+    #: back posts from the same family are penalized even when the window before them
+    #: was mixed. Still a nudge, never a wall: see ``diversity_adjustment``.
+    consecutive_source_family_penalty: float = 5.0
+    #: Step 6B: a candidate whose family already accounts for
+    #: ``last_five_source_family_max`` or more of the last ``last_five_lookback`` posts
+    #: is nudged down further — "no more than 2 of the last 5 from one family."
+    last_five_source_family_penalty: float = 4.0
+    last_five_lookback: int = 5
+    last_five_source_family_max: int = 2
+
 
 DEFAULT_WEIGHTS = DiversityWeights()
 
@@ -76,6 +88,19 @@ def diversity_adjustment(
         penalty += weights.category_repetition_penalty
     if source_family is not None and all(post.source_family == source_family for post in window):
         penalty += weights.source_family_repetition_penalty
+
+    if source_family is not None:
+        recent_list = list(recent)
+        if recent_list and recent_list[-1].source_family == source_family:
+            penalty += weights.consecutive_source_family_penalty
+
+        last_five = (
+            recent_list[-weights.last_five_lookback :] if weights.last_five_lookback > 0 else []
+        )
+        same_family_count = sum(1 for post in last_five if post.source_family == source_family)
+        if same_family_count >= weights.last_five_source_family_max:
+            penalty += weights.last_five_source_family_penalty
+
     return -penalty
 
 

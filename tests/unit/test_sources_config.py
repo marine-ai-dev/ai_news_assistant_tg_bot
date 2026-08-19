@@ -32,6 +32,7 @@ sources:
     editorial_role: Test source.
     priority: PRIMARY_NORMAL
     content_types: [NEWS]
+    publisher_region: UNITED_STATES
 """
 
 
@@ -135,6 +136,7 @@ class TestSelection:
     editorial_role: Disabled source.
     priority: PRIMARY_NORMAL
     content_types: [NEWS]
+    publisher_region: UNITED_STATES
     disabled_reason: Turned off for this test.
 """
         config = load_sources_config(write(tmp_path, text))

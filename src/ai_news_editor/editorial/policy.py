@@ -37,6 +37,22 @@ SHARED_SAFETY_RULES: str = """\
 - If the material is too thin, too vague, or too ambiguous to write from honestly,
   reject instead of writing something anyway. A rejection is a normal outcome.
 - Write in Ukrainian, in plain language a reader with no AI background can follow.
+- Keep it short: at most 3 short body blocks, and at most 2 "detail" bullets — unless
+  this is a RESEARCH, EXPLAINER or WEEKLY_DIGEST post, which may run longer when the
+  material genuinely needs it. A post is read on a phone; write for that, not for a
+  full article. Omit the detail bullets entirely if the body blocks already say
+  everything that matters — do not pad to reach 2 bullets.
+- Reject a story whose primary content is speculative doom/dystopian futurism — an
+  "AI apocalypse" narrative, a hypothetical "AI-run state," fear-driven speculation
+  about society's future — rather than a concrete, present-day fact. Concrete current
+  reporting (a security incident, a lawsuit, a regulation, a documented harmful
+  behavior, an actual policy decision) is not speculation and must still be written
+  normally, even if its subject is serious or negative.
+- Reject a story that is substantially ABOUT Russia, Belarus, or Iran — their AI
+  development, research, companies, products, policy, or statistics — regardless of
+  which outlet reported it. The channel's editorial geography is Ukraine, Europe, the
+  United Kingdom, and the United States; a story merely mentioning one of those three
+  countries in passing (not centered on it) is not affected by this rule.
 """
 
 

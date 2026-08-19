@@ -189,6 +189,22 @@ class ClassificationResult(StrictModel):
     evidence_type: EditorialEvidence | None = None
     reason: NonEmpty | None = None
     rejection_reason: NonEmpty | None = None
+    #: Step 6B: answered on every classification, independent of the classify/reject
+    #: outcome above — this is the model's own judgment of whether the candidate's
+    #: primary content is speculative doom/dystopian futurism (an "AI apocalypse"
+    #: narrative, a hypothetical "AI-run state") rather than concrete present-day
+    #: reporting. See :func:`automation.classification.classify_candidate` for the
+    #: deterministic local rejection this drives — a `True` here is rejected
+    #: unconditionally, never overridden by a `content_type` the model also filled in.
+    is_speculative_doom: bool = False
+    #: Step 6C: answered on every classification, same discipline as
+    #: ``is_speculative_doom`` above — whether the *story itself* (not its source) is
+    #: substantially about Russia, Belarus or Iran (their AI development, research,
+    #: companies, products, policy, statistics). This is a content/subject check, not
+    #: the source-origin check ``sources.geography`` already does — a US/EU/UK/UA
+    #: outlet *reporting on* one of those countries still answers `True` here and is
+    #: still rejected, because the rule is about the story's focus, not who wrote it.
+    is_about_forbidden_geography: bool = False
 
     @model_validator(mode="after")
     def _exactly_one_outcome(self) -> Self:

@@ -113,6 +113,12 @@ class TestNoRepetitionNoAdjustment:
     def test_an_empty_history_applies_no_penalty(self) -> None:
         assert diversity_adjustment(category=NEWS, source_family="Google", recent=[]) == 0.0
 
+    #: Isolates the original unanimous-window logic from the Step 6B additions below
+    #: (consecutive-repeat and last-5-frequency), which have their own dedicated tests.
+    _WINDOW_ONLY = DiversityWeights(
+        lookback=3, consecutive_source_family_penalty=0.0, last_five_source_family_penalty=0.0
+    )
+
     def test_a_single_differing_post_in_the_window_clears_the_penalty(self) -> None:
         """Unanimous, not majority: 2-of-3 matching is not enough."""
         recent = [
@@ -120,16 +126,107 @@ class TestNoRepetitionNoAdjustment:
             RecentPost(AI_TOOL, "Anthropic"),
             RecentPost(NEWS, "Google"),
         ]
-        assert diversity_adjustment(category=NEWS, source_family="Google", recent=recent) == 0.0
+        assert (
+            diversity_adjustment(
+                category=NEWS, source_family="Google", recent=recent, weights=self._WINDOW_ONLY
+            )
+            == 0.0
+        )
 
     def test_only_the_lookback_window_is_consulted(self) -> None:
         """A repetition further back than `lookback` does not count."""
         recent = [RecentPost(NEWS, "Google")] * 2 + [RecentPost(AI_TOOL, "Anthropic")] * 3
-        weights = DiversityWeights(lookback=3)
         # Last 3 are all Anthropic/AI_TOOL — a NEWS/Google candidate sees no overlap.
-        assert diversity_adjustment(
+        assert (
+            diversity_adjustment(
+                category=NEWS, source_family="Google", recent=recent, weights=self._WINDOW_ONLY
+            )
+            == 0.0
+        )
+
+
+class TestConsecutiveSourceFamilyPenalty:
+    """Step 6B: no same source_family twice consecutively — fires on the single most
+    recent post alone, independent of whether the wider window was mixed."""
+
+    def test_repeating_the_immediately_preceding_family_is_penalized(self) -> None:
+        recent = [RecentPost(AI_TOOL, "Anthropic"), RecentPost(NEWS, "Google")]
+        adjustment = diversity_adjustment(category=NEWS, source_family="Google", recent=recent)
+        assert adjustment < 0.0
+
+    def test_a_different_family_than_the_immediately_preceding_post_is_not_penalized(
+        self,
+    ) -> None:
+        recent = [RecentPost(AI_TOOL, "Anthropic"), RecentPost(NEWS, "Google")]
+        adjustment = diversity_adjustment(category=NEWS, source_family="Microsoft", recent=recent)
+        assert adjustment == 0.0
+
+    def test_it_is_still_a_soft_nudge_a_strong_candidate_still_wins(self) -> None:
+        """The only trustworthy candidate of the day still publishes even if it
+        repeats the immediately preceding post's source family."""
+        recent = [RecentPost(NEWS, "Google")]
+        candidates = [
+            ("only_candidate", NEWS, "Google", 90.0),
+        ]
+        ranked = rank(candidates, recent)
+        assert ranked[0].candidate == "only_candidate"
+        assert ranked[0].final_score > 0
+
+
+class TestLastFiveSourceFamilyPenalty:
+    """Step 6B: no more than 2 of the last 5 posts from the same source_family."""
+
+    def test_a_family_already_at_two_of_the_last_five_is_penalized_further(self) -> None:
+        recent = [
+            RecentPost(NEWS, "Google"),
+            RecentPost(AI_TOOL, "Microsoft"),
+            RecentPost(NEWS, "Google"),
+            RecentPost(AI_TOOL, "Anthropic"),
+            RecentPost(NEWS, "Meta"),
+        ]
+        adjustment = diversity_adjustment(category=NEWS, source_family="Google", recent=recent)
+        assert adjustment < 0.0
+
+    def test_a_family_with_only_one_of_the_last_five_is_not_penalized_by_this_rule(self) -> None:
+        recent = [
+            RecentPost(NEWS, "Google"),
+            RecentPost(AI_TOOL, "Microsoft"),
+            RecentPost(AI_TOOL, "Anthropic"),
+            RecentPost(NEWS, "Meta"),
+            RecentPost(AI_TOOL, "Meta"),
+        ]
+        weights = DiversityWeights(consecutive_source_family_penalty=0.0)
+        adjustment = diversity_adjustment(
             category=NEWS, source_family="Google", recent=recent, weights=weights
-        ) == 0.0
+        )
+        assert adjustment == 0.0
+
+    def test_a_repetition_further_back_than_five_does_not_count(self) -> None:
+        recent = [RecentPost(NEWS, "Google")] * 3 + [
+            RecentPost(AI_TOOL, "Anthropic"),
+            RecentPost(AI_TOOL, "Microsoft"),
+            RecentPost(AI_TOOL, "Meta"),
+            RecentPost(NEWS, "Meta"),
+        ]
+        # Last 5 entries contain no "Google" at all — the older run doesn't count.
+        weights = DiversityWeights(consecutive_source_family_penalty=0.0)
+        adjustment = diversity_adjustment(
+            category=NEWS, source_family="Google", recent=recent, weights=weights
+        )
+        assert adjustment == 0.0
+
+    def test_a_strong_candidate_still_wins_despite_the_last_five_penalty(self) -> None:
+        recent = [
+            RecentPost(NEWS, "Google"),
+            RecentPost(AI_TOOL, "Google"),
+            RecentPost(NEWS, "Microsoft"),
+            RecentPost(AI_TOOL, "Anthropic"),
+            RecentPost(NEWS, "Meta"),
+        ]
+        candidates = [("strong_google", NEWS, "Google", 95.0)]
+        ranked = rank(candidates, recent)
+        assert ranked[0].candidate == "strong_google"
+        assert ranked[0].final_score > 0
 
 
 class TestWeightsAreCentralized:

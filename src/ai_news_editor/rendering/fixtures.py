@@ -36,7 +36,7 @@ SAMPLE_CONTENT: dict[EditorialCategory, EditorialContent] = {
                 text="Функція доступна для всіх користувачів з сьогодні.",
             ),
         ),
-        detail_bullets=("Працює у веб-версії", "Підтримує 12 мов", "Безкоштовно для всіх"),
+        detail_bullets=("Працює у веб-версії", "Підтримує 12 мов"),
         source_label="ExampleCorp",
         source_url="https://blog.example.invalid/sheets-ai",
     ),

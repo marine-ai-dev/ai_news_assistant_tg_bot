@@ -78,9 +78,20 @@ SOURCE_LINE_LABEL = "Джерело"
 #: An ordinary NEWS/AI_TOOL/FREE_DEAL/AI_LIFEHACK/PROMPT_WORKFLOW post's rendered body
 #: (excluding headline and source line) should usually land in this range. Not a hard
 #: cap — see WIDE_CATEGORIES below and render.py's own "never cut facts to hit a
-#: number" rule — but a post far outside it is worth a human's attention.
-TARGET_BODY_CHARS_MIN = 500
-TARGET_BODY_CHARS_MAX = 900
+#: number" rule — but a post far outside it is worth a human's attention. Tightened
+#: after the first real test-channel soak (Step 6B): real posts read as too long at
+#: the old 500-900 target, and the fix is a smaller generation contract (fewer, shorter
+#: fields), never a renderer-side truncation of what Gemini already wrote.
+TARGET_BODY_CHARS_MIN = 400
+TARGET_BODY_CHARS_MAX = 750
+
+#: Step 6B: how many semantic body blocks an ordinary (non-wide) category's generation
+#: contract asks for, and how many "🔆 Детальніше" bullets it may add on top. A category
+#: prompt that asks for more than this produces exactly the "4 paragraphs + 4 bullets"
+#: wall of text real human review flagged — capped once, here, rather than in every
+#: category's own prompt text.
+ORDINARY_MAX_BODY_BLOCKS = 3
+ORDINARY_MAX_DETAIL_BULLETS = 2
 
 #: RESEARCH and EXPLAINER routinely need more room to state a finding and its caveats
 #: honestly; WEEKLY_DIGEST is multiple items in one post. These categories are exempt

@@ -196,7 +196,8 @@ class TestCollectCommand:
             "    trust_tier: OFFICIAL\n"
             "    editorial_role: Test source for the CLI.\n"
             "    priority: PRIMARY_NORMAL\n"
-            "    content_types: [NEWS]\n",
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n",
             encoding="utf-8",
         )
         return path
@@ -360,6 +361,7 @@ class TestSourcesDoctorCommand:
             "    editorial_role: A source that resolves and parses.\n"
             "    priority: PRIMARY_NORMAL\n"
             "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
             "  - id: broken\n"
             "    name: Broken Source\n"
             "    adapter: rss\n"
@@ -368,6 +370,7 @@ class TestSourcesDoctorCommand:
             "    editorial_role: A source whose endpoint returns an error.\n"
             "    priority: PRIMARY_NORMAL\n"
             "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
             "  - id: disabled_source\n"
             "    name: Disabled Source\n"
             "    enabled: false\n"
@@ -377,6 +380,7 @@ class TestSourcesDoctorCommand:
             "    editorial_role: A disabled source, never probed by default.\n"
             "    priority: PRIMARY_NORMAL\n"
             "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
             "    disabled_reason: Disabled for this test.\n",
             encoding="utf-8",
         )
@@ -420,7 +424,8 @@ class TestSourcesDoctorCommand:
             "    trust_tier: OFFICIAL\n"
             "    editorial_role: A source that resolves and parses.\n"
             "    priority: PRIMARY_NORMAL\n"
-            "    content_types: [NEWS]\n",
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n",
             encoding="utf-8",
         )
         monkeypatch.setenv("AI_NEWS_SOURCES_CONFIG_PATH", str(path))

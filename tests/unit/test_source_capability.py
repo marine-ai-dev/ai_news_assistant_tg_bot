@@ -40,6 +40,7 @@ def _source(**overrides: object) -> SourceDefinition:
         "editorial_role": "A source for capability tests.",
         "priority": "PRIMARY_NORMAL",
         "content_types": (ContentCapability.NEWS,),
+        "publisher_region": "UNITED_STATES",
     }
     data.update(overrides)
     return SourceDefinition.model_validate(data)

@@ -43,6 +43,7 @@ sources:
     url: https://openai.com/news/rss.xml
     trust_tier: OFFICIAL
     publisher: OpenAI
+    publisher_region: UNITED_STATES
     source_family: OpenAI
     priority: PRIMARY_HIGH
     content_types: [NEWS, AI_TOOL]
@@ -58,6 +59,7 @@ sources:
     url: https://blog.google/technology/ai/rss/
     trust_tier: OFFICIAL
     publisher: Google
+    publisher_region: UNITED_STATES
     source_family: Google
     priority: PRIMARY_HIGH
     content_types: [NEWS, AI_TOOL]
@@ -73,6 +75,7 @@ sources:
     url: https://deepmind.google/blog/rss.xml
     trust_tier: OFFICIAL
     publisher: Google DeepMind
+    publisher_region: UNITED_KINGDOM
     source_family: Google
     priority: PRIMARY_HIGH
     content_types: [NEWS, RESEARCH]
@@ -88,6 +91,7 @@ sources:
     url: https://research.google/blog/rss/
     trust_tier: OFFICIAL
     publisher: Google Research
+    publisher_region: UNITED_STATES
     source_family: Google
     priority: PRIMARY_NORMAL
     content_types: [RESEARCH]
@@ -103,6 +107,7 @@ sources:
     url: https://huggingface.co/blog/feed.xml
     trust_tier: OFFICIAL
     publisher: Hugging Face
+    publisher_region: UNITED_STATES
     source_family: Hugging Face
     priority: PRIMARY_HIGH
     content_types: [NEWS, AI_TOOL, RESEARCH]
@@ -119,6 +124,7 @@ sources:
     url: https://www.microsoft.com/en-us/microsoft-365/blog/feed/
     trust_tier: OFFICIAL
     publisher: Microsoft
+    publisher_region: UNITED_STATES
     source_family: Microsoft
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -134,6 +140,7 @@ sources:
     url: https://news.microsoft.com/source/topics/ai/feed/
     trust_tier: OFFICIAL
     publisher: Microsoft
+    publisher_region: UNITED_STATES
     source_family: Microsoft
     priority: PRIMARY_HIGH
     content_types: [NEWS]
@@ -149,6 +156,7 @@ sources:
     url: https://www.microsoft.com/en-us/research/feed/
     trust_tier: OFFICIAL
     publisher: Microsoft Research
+    publisher_region: UNITED_STATES
     source_family: Microsoft
     priority: PRIMARY_NORMAL
     content_types: [RESEARCH]
@@ -164,6 +172,7 @@ sources:
     url: https://github.blog/changelog/feed/
     trust_tier: OFFICIAL
     publisher: GitHub
+    publisher_region: UNITED_STATES
     source_family: GitHub
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -180,6 +189,7 @@ sources:
     url: https://blogs.nvidia.com/feed/
     trust_tier: OFFICIAL
     publisher: NVIDIA
+    publisher_region: UNITED_STATES
     source_family: NVIDIA
     priority: PRIMARY_NORMAL
     content_types: [NEWS, RESEARCH]
@@ -195,6 +205,7 @@ sources:
     url: https://aws.amazon.com/blogs/machine-learning/feed/
     trust_tier: OFFICIAL
     publisher: Amazon Web Services
+    publisher_region: UNITED_STATES
     source_family: Amazon
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL, RESEARCH]
@@ -210,6 +221,7 @@ sources:
     url: https://machinelearning.apple.com/rss.xml
     trust_tier: OFFICIAL
     publisher: Apple
+    publisher_region: UNITED_STATES
     source_family: Apple
     priority: PRIMARY_NORMAL
     content_types: [RESEARCH]
@@ -225,6 +237,7 @@ sources:
     url: https://mistral.ai/news/rss
     trust_tier: OFFICIAL
     publisher: Mistral AI
+    publisher_region: EUROPE
     source_family: Mistral AI
     priority: PRIMARY_HIGH
     content_types: [NEWS, AI_TOOL]
@@ -247,6 +260,7 @@ sources:
     url: https://www.anthropic.com/news
     trust_tier: OFFICIAL
     publisher: Anthropic
+    publisher_region: UNITED_STATES
     source_family: Anthropic
     priority: PRIMARY_HIGH
     content_types: [NEWS, AI_TOOL]
@@ -273,6 +287,7 @@ sources:
     url: https://www.notion.com/releases
     trust_tier: OFFICIAL
     publisher: Notion
+    publisher_region: UNITED_STATES
     source_family: Notion
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -302,6 +317,7 @@ sources:
     url: https://techcrunch.com/category/artificial-intelligence/feed/
     trust_tier: REPUTABLE_SECONDARY
     publisher: TechCrunch
+    publisher_region: UNITED_STATES
     source_family: TechCrunch
     priority: DISCOVERY
     content_types: [NEWS]
@@ -318,6 +334,7 @@ sources:
     url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
     trust_tier: REPUTABLE_SECONDARY
     publisher: The Verge
+    publisher_region: UNITED_STATES
     source_family: The Verge
     priority: DISCOVERY
     content_types: [NEWS]
@@ -333,6 +350,7 @@ sources:
     url: https://arstechnica.com/ai/feed/
     trust_tier: REPUTABLE_SECONDARY
     publisher: Ars Technica
+    publisher_region: UNITED_STATES
     source_family: Ars Technica
     priority: DISCOVERY
     content_types: [NEWS, EXPLAINER]
@@ -348,6 +366,7 @@ sources:
     url: https://www.wired.com/feed/tag/ai/latest/rss
     trust_tier: REPUTABLE_SECONDARY
     publisher: WIRED
+    publisher_region: UNITED_STATES
     source_family: WIRED
     priority: DISCOVERY
     content_types: [NEWS, EXPLAINER]
@@ -363,6 +382,7 @@ sources:
     url: https://www.technologyreview.com/topic/artificial-intelligence/feed/
     trust_tier: REPUTABLE_SECONDARY
     publisher: MIT Technology Review
+    publisher_region: UNITED_STATES
     source_family: MIT Technology Review
     priority: DISCOVERY
     content_types: [NEWS, RESEARCH, EXPLAINER]
@@ -370,6 +390,95 @@ sources:
       The most research-literate journalism in the mix — closest in depth to a primary
       source without being one, and a reliable check on claims that sound too good.
     tags: [industry, research, technical]
+
+  # ============================================================================
+  # TIER B — UKRAINIAN TECH/AI MEDIA (trust_tier: REPUTABLE_SECONDARY)
+  #
+  # Added Step 6B, section 6, after live verification (fetched directly over HTTPS,
+  # 2026-08-19, same User-Agent HttpClient sends): every URL below returned 200 with
+  # a real, parseable, recently-updated feed. AIN.UA's feed is a genuine AI-tag-
+  # filtered feed (like the Tier B AI-topic feeds above); DOU, dev.ua and Speka do
+  # not expose an AI-specific feed after a real attempt to find one (tag/category
+  # query parameters were tried and confirmed to be ignored, returning the same
+  # general feed) — their general feeds are used instead, same as any other general
+  # tech-press source, relying on the same classification/geography/capability funnel
+  # every other Tier B source already goes through. All four are UKRAINE-region under
+  # the new geography allowlist (see PublisherRegion) — this is genuinely why they
+  # were sought out: to give the allowlist a real Ukrainian source, not just US/UK/EU.
+  # ============================================================================
+
+  - id: dou_ua
+    name: DOU.ua
+    enabled: true
+    adapter: rss
+    url: https://dou.ua/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: DOU
+    publisher_region: UKRAINE
+    source_family: DOU
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukraine's largest developer-community publication — interviews, deeptech and
+      general IT news from Ukrainian companies and engineers. General feed, not
+      AI-specific (no AI-tag feed was found); relies on classification to surface the
+      genuinely AI-relevant stories among it.
+    tags: [ukraine, community, general_tech]
+
+  - id: ain_ua_ai
+    name: AIN.UA — AI
+    enabled: true
+    adapter: rss
+    url: https://ain.ua/tag/ai/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: AIN.UA
+    publisher_region: UKRAINE
+    source_family: AIN.UA
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      A genuinely AI-tag-filtered feed from Ukraine's main business/tech news outlet —
+      Ukrainian companies adopting AI, local product launches, and AI stories with a
+      Ukrainian angle.
+    tags: [ukraine, industry, business]
+
+  - id: dev_ua
+    name: dev.ua
+    enabled: true
+    adapter: rss
+    url: https://dev.ua/rss
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: dev.ua
+    publisher_region: UKRAINE
+    source_family: dev.ua
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukrainian IT-industry media covering local and global tech, including AI, from a
+      Ukrainian-market angle. General feed, not AI-specific; relies on classification
+      the same way DOU's general feed does.
+    tags: [ukraine, industry, general_tech]
+
+  - id: speka_media
+    name: Speka
+    enabled: true
+    adapter: rss
+    url: https://speka.ua/rss
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: Speka
+    publisher_region: UKRAINE
+    source_family: Speka
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukrainian media about technology and entrepreneurship. General feed (a large
+      archive — capped by max_items_per_fetch like openai_news), not AI-specific;
+      relies on classification the same way DOU's and dev.ua's general feeds do.
+    tags: [ukraine, business, general_tech]
 
   # ============================================================================
   # TIER C — COMMUNITY (trust_tier: COMMUNITY_SIGNAL)
@@ -388,6 +497,7 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: Hacker News
+    publisher_region: UNITED_STATES
     source_family: Hacker News
     priority: COMMUNITY
     content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
@@ -411,6 +521,7 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: Lobsters
+    publisher_region: UNITED_STATES
     source_family: Lobsters
     priority: COMMUNITY
     content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
@@ -428,6 +539,7 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: Product Hunt
+    publisher_region: UNITED_STATES
     source_family: Product Hunt
     priority: COMMUNITY
     content_types: [AI_TOOL, FREE_DEAL, AI_LIFEHACK]
@@ -450,6 +562,7 @@ sources:
     url: https://ai.meta.com/blog/
     trust_tier: OFFICIAL
     publisher: Meta
+    publisher_region: UNITED_STATES
     source_family: Meta
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL, RESEARCH]
@@ -470,6 +583,7 @@ sources:
     url: https://cohere.com/blog
     trust_tier: OFFICIAL
     publisher: Cohere
+    publisher_region: OTHER
     source_family: Cohere
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -488,6 +602,7 @@ sources:
     url: https://stability.ai/news
     trust_tier: OFFICIAL
     publisher: Stability AI
+    publisher_region: UNITED_KINGDOM
     source_family: Stability AI
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -506,6 +621,7 @@ sources:
     url: https://x.ai/news
     trust_tier: OFFICIAL
     publisher: xAI
+    publisher_region: UNITED_STATES
     source_family: xAI
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -524,6 +640,7 @@ sources:
     url: https://www.perplexity.ai/hub/blog
     trust_tier: OFFICIAL
     publisher: Perplexity
+    publisher_region: UNITED_STATES
     source_family: Perplexity
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -542,6 +659,7 @@ sources:
     url: https://blog.adobe.com/en/topics/adobe-firefly
     trust_tier: OFFICIAL
     publisher: Adobe
+    publisher_region: UNITED_STATES
     source_family: Adobe
     priority: PRIMARY_NORMAL
     content_types: [NEWS, AI_TOOL]
@@ -560,6 +678,7 @@ sources:
     url: https://venturebeat.com/category/ai/
     trust_tier: REPUTABLE_SECONDARY
     publisher: VentureBeat
+    publisher_region: UNITED_STATES
     source_family: VentureBeat
     priority: DISCOVERY
     content_types: [NEWS]
@@ -580,6 +699,7 @@ sources:
     url: https://www.reuters.com/technology/artificial-intelligence/
     trust_tier: REPUTABLE_SECONDARY
     publisher: Reuters
+    publisher_region: UNITED_KINGDOM
     source_family: Reuters
     priority: DISCOVERY
     content_types: [NEWS]
@@ -599,6 +719,7 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: Reddit
+    publisher_region: UNITED_STATES
     source_family: Reddit
     priority: COMMUNITY
     content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
@@ -621,6 +742,7 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: X
+    publisher_region: UNITED_STATES
     source_family: X
     priority: COMMUNITY
     content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]

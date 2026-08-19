@@ -32,16 +32,34 @@ _CLASSIFICATION_SYSTEM_INSTRUCTION = """\
 You are classifying ONE candidate story for a Ukrainian Telegram channel about AI.
 
 You will receive one candidate's title, source, URL and any short excerpt already
-collected. Answer two questions about it:
+collected. Answer four questions about it:
 
 1. content_type — what kind of editorial post this candidate could become. Choose
    exactly one of the given enum values; never invent a new one.
 2. evidence_type — how strong the evidence behind it is, judged only from what you were
    given (the source name and the excerpt), never from anything you know about the
    company or product from outside this material.
+3. is_speculative_doom — true only if this candidate's primary content is speculative
+   doom/dystopian futurism about AI: an "AI apocalypse" narrative, a hypothetical
+   "AI-run state," fear-driven speculation about society's future, clickbait about AI
+   destroying society. Answer false for concrete, present-day reporting even when its
+   subject is serious or negative — a security incident, a lawsuit, an actual
+   regulation, a documented harmful behavior, a real policy decision are not
+   speculation and must be answered false.
+4. is_about_forbidden_geography — true if this candidate's story is substantially
+   ABOUT Russia, Belarus, or Iran: their AI development, research, companies, product
+   announcements, government policy, statistics, or any innovation/feature tied to one
+   of those countries. This is about the story's own subject, not who published it — a
+   US, European, British or Ukrainian outlet's story that is itself substantially
+   about one of those three countries still answers true. A story that merely mentions
+   one of those countries in passing, without being about it, answers false — the
+   channel's editorial focus is Ukraine, Europe, the United Kingdom and the United
+   States, and this question exists to keep stories actually centered elsewhere out.
 
-If you cannot confidently answer both from the material given — too little
-information, too ambiguous — return a rejection instead of guessing.
+If you cannot confidently answer content_type and evidence_type from the material
+given — too little information, too ambiguous — return a rejection instead of
+guessing. Answer is_speculative_doom and is_about_forbidden_geography either way, even
+on a rejection.
 
 Respond only with JSON matching the given schema.
 """
@@ -61,11 +79,20 @@ _CLASSIFICATION_RESPONSE_SCHEMA: dict[str, object] = {
         },
         "reason": {"type": "STRING", "nullable": True},
         "rejection_reason": {"type": "STRING", "nullable": True},
+        "is_speculative_doom": {"type": "BOOLEAN"},
+        "is_about_forbidden_geography": {"type": "BOOLEAN"},
     },
     # Same discipline as _GENERATION_RESPONSE_SCHEMA in automation.provider: every key
     # is required so a response that silently omits one is a schema failure, not a
     # blank field; "nullable" is what still lets a rejection answer with null values.
-    "required": ["content_type", "evidence_type", "reason", "rejection_reason"],
+    "required": [
+        "content_type",
+        "evidence_type",
+        "reason",
+        "rejection_reason",
+        "is_speculative_doom",
+        "is_about_forbidden_geography",
+    ],
 }
 
 
@@ -117,6 +144,23 @@ def classify_candidate(client: GeminiClient, candidate: SelectionCandidate) -> C
         raise ClassificationInvalid(
             f"Gemini's classification response did not match the schema: {exc}"
         ) from exc
+
+    if parsed.is_speculative_doom:
+        # Deterministic, local: a True here is rejected unconditionally, never
+        # overridden by a content_type Gemini also filled in on the same response.
+        raise ClassificationRejected(
+            "speculative dystopian/doom-futurism narrative, not concrete reporting"
+        )
+
+    if parsed.is_about_forbidden_geography:
+        # Step 6C: a hard content filter, not a soft preference — a story whose own
+        # subject is Russia/Belarus/Iran is rejected regardless of which source
+        # (even a UA/EU/UK/US one) reported it. Deterministic and unconditional, same
+        # discipline as is_speculative_doom above.
+        raise ClassificationRejected(
+            "story is substantially about Russia, Belarus, or Iran — outside the "
+            "channel's Ukraine/Europe/UK/US editorial geography"
+        )
 
     if parsed.rejection_reason is not None:
         raise ClassificationRejected(parsed.rejection_reason)

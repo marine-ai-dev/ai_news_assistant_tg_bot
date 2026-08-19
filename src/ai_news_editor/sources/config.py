@@ -22,6 +22,7 @@ from ai_news_editor.domain.enums import (
     ContentCapability,
     FulltextPolicy,
     MediaPolicy,
+    PublisherRegion,
     SourceKind,
     SourcePriority,
     TrustTier,
@@ -57,6 +58,7 @@ ConfiguredFulltextPolicy = Annotated[FulltextPolicy, BeforeValidator(_upper)]
 ConfiguredContentCapabilities = Annotated[
     tuple[ContentCapability, ...], BeforeValidator(_upper_seq)
 ]
+ConfiguredPublisherRegion = Annotated[PublisherRegion, BeforeValidator(_upper)]
 
 
 class FetchDefaults(BaseModel):
@@ -136,6 +138,12 @@ class SourceDefinition(BaseModel):
     #: Required exactly when `enabled` is False — why this source isn't live yet, so a
     #: disabled entry documents itself instead of looking like an oversight.
     disabled_reason: str | None = Field(default=None, min_length=1)
+    #: Step 6B: where this source's publisher is actually headquartered/edited —
+    #: required, never defaulted, and never inferred from the feed's TLD or domain.
+    #: See ``sources.geography`` for allowlist enforcement; ``PublisherRegion.UNKNOWN``
+    #: is a valid, explicit value for a not-yet-reviewed source, which still fails the
+    #: allowlist check until it is reviewed.
+    publisher_region: ConfiguredPublisherRegion
 
     @model_validator(mode="after")
     def _url_is_fetchable(self) -> Self:

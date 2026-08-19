@@ -76,6 +76,35 @@ class MediaPolicy(StrEnum):
     EXPLICIT_REUSE_ALLOWED = "EXPLICIT_REUSE_ALLOWED"
 
 
+class PublisherRegion(StrEnum):
+    """Step 6B: where a source's publisher is actually headquartered/edited — never
+    inferred from a feed's TLD, hosting location, or language. This is reviewed, human
+    metadata: every :class:`~sources.config.SourceDefinition` must set one explicitly.
+
+    The channel's eligible-source allowlist (``geography.ALLOWED_REGIONS``) is exactly
+    ``{UKRAINE, EUROPE, UNITED_KINGDOM, UNITED_STATES}`` — UNITED_KINGDOM is kept as its
+    own member (not folded into EUROPE) because that is how a reviewer verifies it, but
+    the allowlist itself treats it the same as EUROPE, matching the spec's "United
+    Kingdom counts as Europe" instruction. ``RUSSIA``, ``BELARUS`` and ``IRAN`` are
+    named explicitly (not left to fall through "OTHER") so a reviewer sees the actual
+    forbidden country in config and in a rejection message, not a vague catch-all.
+    ``OTHER`` is any real, known origin outside the allowlist (e.g. Canada, Japan) —
+    still ineligible, just not one of the three explicitly named forbidden ones.
+    ``UNKNOWN`` is for a source whose origin has not yet been reviewed — ineligible
+    until it is, which is what makes the allowlist fail closed rather than open.
+    """
+
+    UKRAINE = "UKRAINE"
+    EUROPE = "EUROPE"
+    UNITED_KINGDOM = "UNITED_KINGDOM"
+    UNITED_STATES = "UNITED_STATES"
+    RUSSIA = "RUSSIA"
+    BELARUS = "BELARUS"
+    IRAN = "IRAN"
+    OTHER = "OTHER"
+    UNKNOWN = "UNKNOWN"
+
+
 class SourcePriority(StrEnum):
     """Coarse ranking metadata for a future editorial diversity/ranking pass.
 

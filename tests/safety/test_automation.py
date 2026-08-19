@@ -258,6 +258,7 @@ sources:
     editorial_role: Primary official source for end-to-end tests.
     priority: PRIMARY_NORMAL
     content_types: [NEWS]
+    publisher_region: UNITED_STATES
 """,
         encoding="utf-8",
     )

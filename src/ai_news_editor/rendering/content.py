@@ -26,6 +26,11 @@ from ai_news_editor.domain.enums import (
     PromptOrigin,
 )
 from ai_news_editor.editorial.safety import ResearchClaimFraming
+from ai_news_editor.rendering.style import (
+    ORDINARY_MAX_BODY_BLOCKS,
+    ORDINARY_MAX_DETAIL_BULLETS,
+    WIDE_CATEGORIES,
+)
 
 NonEmpty = Field(min_length=1, max_length=4000)
 
@@ -106,6 +111,27 @@ class EditorialContent(ContentModel):
             raise ValueError("RESEARCH requires research_framing")
         if self.category is EditorialCategory.WEEKLY_DIGEST and not self.digest_items:
             raise ValueError("WEEKLY_DIGEST requires at least one digest item")
+        return self
+
+    @model_validator(mode="after")
+    def _ordinary_categories_stay_short(self) -> Self:
+        """Step 6B: the generation contract itself produces fewer, shorter fields for
+        an ordinary post — enforced here, not by the renderer truncating afterward.
+        RESEARCH/EXPLAINER/WEEKLY_DIGEST (``rendering.style.WIDE_CATEGORIES``) are
+        exempt, exactly like the renderer's own length warning already exempts them.
+        """
+        if self.category in WIDE_CATEGORIES:
+            return self
+        if len(self.body) > ORDINARY_MAX_BODY_BLOCKS:
+            raise ValueError(
+                f"{self.category.value} allows at most {ORDINARY_MAX_BODY_BLOCKS} body "
+                f"blocks, got {len(self.body)}"
+            )
+        if len(self.detail_bullets) > ORDINARY_MAX_DETAIL_BULLETS:
+            raise ValueError(
+                f"{self.category.value} allows at most {ORDINARY_MAX_DETAIL_BULLETS} "
+                f"detail bullets, got {len(self.detail_bullets)}"
+            )
         return self
 
 

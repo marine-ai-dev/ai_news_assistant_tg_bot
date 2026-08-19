@@ -56,6 +56,7 @@ def _source_def(source_id: str, family: str) -> SourceDefinition:
             "priority": "PRIMARY_NORMAL",
             "content_types": ["NEWS"],
             "source_family": family,
+            "publisher_region": "UNITED_STATES",
         }
     )
 
