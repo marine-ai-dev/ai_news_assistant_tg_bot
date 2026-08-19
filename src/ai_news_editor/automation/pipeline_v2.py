@@ -20,7 +20,7 @@ already established), and is never invoked by the unattended cron workflow.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -38,9 +38,11 @@ from ai_news_editor.automation.generation_v2 import (
     generate_editorial_content,
 )
 from ai_news_editor.automation.schema import SelectionCandidate
-from ai_news_editor.domain.enums import EditorialCategory, EditorialEvidence
+from ai_news_editor.domain.enums import EditorialCategory, EditorialEvidence, TrustTier
+from ai_news_editor.domain.models import Article
 from ai_news_editor.editorial.diversity import RecentPost
 from ai_news_editor.editorial.preview import PreviewCandidate, build_preview
+from ai_news_editor.editorial.primary_source import prefer_primary_sources
 from ai_news_editor.media.models import MediaOutcome
 from ai_news_editor.media.pipeline import select_media
 from ai_news_editor.media.workspace import MediaWorkspace
@@ -50,6 +52,29 @@ from ai_news_editor.rendering.render import RenderedPost, render_editorial_post
 from ai_news_editor.sources.config import SourceDefinition
 
 logger = get_logger(__name__)
+
+
+def collapse_to_primary_sources(
+    articles: Sequence[Article], trust_tier_of: Callable[[Article], TrustTier]
+) -> list[Article]:
+    """Section 30, actually wired: before any candidate reaches selection, collapse
+    each same-story cluster down to its single highest-trust-tier representative.
+
+    A Tier B article and an equivalent Tier A official announcement of the same
+    story — linked via the existing ``Article.possible_duplicate_of_id`` normalization
+    already records — never both reach ``select_top_candidate``; only the Tier A one
+    does. Zero Gemini calls: this is exactly ``editorial.primary_source.prefer_primary_sources``,
+    called here instead of left as a note for the caller to remember.
+    """
+    preferred = prefer_primary_sources(articles, trust_tier_of)
+    seen: set[UUID] = set()
+    result: list[Article] = []
+    for article in articles:
+        primary = preferred[article.id]
+        if primary.id not in seen:
+            seen.add(primary.id)
+            result.append(primary)
+    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,12 +165,11 @@ def run_pipeline_v2(
     """Run the full v2 pipeline for the single best candidate in ``candidates``.
 
     Primary-source preference (Step 3 ``editorial.primary_source``, section 30) is
-    the caller's responsibility, applied *before* building ``candidates`` — that
-    module operates on real ``Article`` rows and their ``possible_duplicate_of_id``
-    links, which this function's deliberately thin ``ArticleContext`` input does not
-    carry. A caller assembling ``candidates`` from the database should resolve each
-    same-story group to its preferred (highest-trust-tier) article first, exactly as
-    ``editorial.primary_source.prefer_primary_sources`` already does, so only one
+    applied *before* building ``candidates`` — call ``collapse_to_primary_sources`` on
+    the real ``Article`` rows first, since that module operates on
+    ``possible_duplicate_of_id`` links this function's deliberately thin
+    ``ArticleContext`` input does not carry itself. A caller assembling ``candidates``
+    from the database should always do that collapse first, so only one
     representative of any given story ever reaches this ranking step.
 
     Raises:
@@ -221,6 +245,7 @@ __all__ = [
     "ArticleContext",
     "OrchestrationOutcome",
     "OrchestrationRejected",
+    "collapse_to_primary_sources",
     "run_pipeline_v2",
     "select_top_candidate",
 ]
