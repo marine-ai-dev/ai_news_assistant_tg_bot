@@ -32,6 +32,12 @@ class DiscoveryMethod(StrEnum):
     OPEN_GRAPH_VIDEO = "OPEN_GRAPH_VIDEO"
     #: schema.org / JSON-LD `image` or `video` property.
     JSON_LD = "JSON_LD"
+    #: Step 6: an `<img>` on a source's own explicitly-licensed asset page — the one
+    #: deliberate, narrowly-scoped exception to "never scrape `<img>` tags" (see
+    #: `media.discover.discover_licensed_library_assets` and `media.licensed_assets`).
+    #: Never used for an ordinary article page; only for a page whose own stated terms
+    #: were hand-verified to permit exactly this.
+    LICENSED_LIBRARY = "LICENSED_LIBRARY"
 
 
 @dataclass(frozen=True, slots=True)

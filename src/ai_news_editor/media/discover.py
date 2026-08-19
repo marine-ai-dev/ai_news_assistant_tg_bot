@@ -239,4 +239,64 @@ def _filter_and_rank(candidates: list[MediaCandidate]) -> list[MediaCandidate]:
     return sorted(kept, key=lambda c: c.confidence, reverse=True)
 
 
-__all__ = ["discover_from_feed_entry", "discover_from_html"]
+def discover_licensed_library_assets(
+    html: str, page_url: str, *, keywords: list[str]
+) -> list[MediaCandidate]:
+    """The one deliberate, narrow exception to "never scrape ``<img>`` tags."
+
+    Every other function in this module reads only structured metadata (an
+    enclosure, an Open Graph tag, a JSON-LD property) because a normal article page
+    grants no reuse permission at all, and scraping its ``<img>`` tags would pick up
+    logos, avatars and unrelated thumbnails as often as a real hero image. This
+    function exists for the opposite case: a page whose own stated terms — verified
+    by direct fetch, not assumed — explicitly permit reuse of the images *on that
+    page*, for example Google's Press Corner Image Library
+    (``https://blog.google/image-library/``): "Images on this page may be used for
+    publication with credit: 'Source: Google.'" That permission is real but narrow —
+    it says nothing about any other page, including an ordinary blog.google article's
+    own hero image — so this function must only ever be called with ``page_url`` set
+    to a page whose terms were actually checked (see ``media.licensed_assets``), never
+    generically. Callers still enforce ``keywords`` relevance before download; nothing
+    here or downstream substitutes an unrelated image for a story that has none.
+
+    ``keywords`` are matched, case-insensitively, against each ``<img>``'s ``alt``
+    text — an image with no ``alt`` text, or whose ``alt`` text matches no keyword,
+    is never returned. This is a relevance filter, not a discovery relaxation: still
+    no image without matching, human-authored alt text is ever a candidate.
+    """
+    try:
+        tree = HTMLParser(html)
+    except Exception:  # pragma: no cover - selectolax raises exceedingly rarely
+        return []
+
+    lowered_keywords = [k.lower() for k in keywords if k.strip()]
+    if not lowered_keywords:
+        return []
+
+    candidates: list[MediaCandidate] = []
+    for node in tree.css("img"):
+        alt = (node.attributes.get("alt") or "").strip()
+        src = node.attributes.get("src")
+        if not alt or not src:
+            continue
+        if not any(keyword in alt.lower() for keyword in lowered_keywords):
+            continue
+        candidates.append(
+            MediaCandidate(
+                url=urljoin(page_url, src),
+                kind=MediaKind.IMAGE,
+                source_method=DiscoveryMethod.LICENSED_LIBRARY,
+                source_url=page_url,
+                width=_to_int(node.attributes.get("width")),
+                height=_to_int(node.attributes.get("height")),
+                confidence=0.6,
+            )
+        )
+    return _filter_and_rank(candidates)
+
+
+__all__ = [
+    "discover_from_feed_entry",
+    "discover_from_html",
+    "discover_licensed_library_assets",
+]
