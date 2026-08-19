@@ -32,12 +32,16 @@ on:
         options: [dry-run, test, live, telegram-doctor, telegram-doctor-live]
         default: dry-run
   schedule:
-    # 08:00 UTC, Mon–Fri. GitHub Actions cron has no timezone concept, so this drifts
-    # between 10:00 and 11:00 Europe/Kyiv across the DST boundary rather than holding a
-    # fixed local time — accepted rather than worked around, same as the local
-    # scheduler's own documented DST policy (see README § Europe/Kyiv scheduling).
+    # 10:00, 13:00, 16:00, 19:00 Europe/Kyiv, every day. Uses GitHub Actions'
+    # timezone-aware `timezone:` field (IANA string) so these stay fixed local times
+    # across the DST boundary, rather than drifting the way a bare UTC cron would —
+    # see README § Europe/Kyiv scheduling for the local scheduler's equivalent policy.
+    # Each of these four runs is independent and, per the "does at most one thing"
+    # contract above, publishes 0 or 1 post — never more — so 2-4 posts/day is a
+    # ceiling driven by real candidate availability, not a target this schedule forces.
     # Scheduled runs always use mode "live" (still subject to the kill switch above).
-    - cron: "0 8 * * 1-5"
+    - cron: "0 10,13,16,19 * * *"
+      timezone: "Europe/Kyiv"
 
 # Nothing here needs more than pushing the state commit back to this same repo.
 permissions:

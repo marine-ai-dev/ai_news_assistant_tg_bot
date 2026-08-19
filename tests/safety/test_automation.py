@@ -938,6 +938,120 @@ class TestFailClosedPaths:
         assert result.channel == settings.telegram_channel
 
 
+class TestFourSlotDailyCadence:
+    """Publishing cadence moved from one scheduled run/day to four (10:00, 13:00,
+    16:00, 19:00 Europe/Kyiv — see .github/workflows/ai-news-publish.yml) with
+    AI_NEWS_DAILY_POST_LIMIT raised to 4. Nothing in ``run_automation`` itself changed
+    for this — the daily limit and eligibility queries already read real rows from the
+    same connection every call — but these tests prove that holds at the new volume,
+    against the real storage layer, rather than assuming four sequential runs behave
+    like one because the code has no explicit per-run state.
+    """
+
+    def test_four_sequential_runs_each_publish_a_distinct_article_then_a_fifth_is_blocked(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Simulates one full day of the new schedule: four scheduled slots, each its
+        own ``run_automation`` call against the same connection (exactly how four
+        independent workflow runs share the same committed-back database), then a
+        hypothetical fifth slot the same day. Proves the daily counter and cross-run
+        dedup both hold across more than the two calls the older tests exercised."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, daily_post_limit=4)
+
+        published_urls: list[str] = []
+        for _slot in range(4):
+            article = seed_official_article(connection)
+            patch_clients(
+                monkeypatch,
+                gemini_transport=fake_gemini_transport(
+                    selection={"selected_id": "1"},
+                    generation={**VALID_GENERATION, "source_url": article.canonical_url},
+                ),
+                telegram_transport=fake_telegram_transport(),
+            )
+            result = run_automation(connection, settings, mode="live")
+            assert result.outcome is Outcome.PUBLISHED, result.detail
+            published_urls.append(article.canonical_url)
+
+        assert len(set(published_urls)) == 4  # no article was offered or sent twice
+        assert PublicationRepository(connection).count() == 4
+
+        # A fifth slot the same day, even with a fresh eligible article available,
+        # must find the daily ceiling already reached rather than publish a fifth post.
+        seed_official_article(connection)
+        patch_clients(
+            monkeypatch, gemini_transport=fake_gemini_transport(), telegram_transport=None
+        )
+        fifth = run_automation(connection, settings, mode="live")
+        assert fifth.outcome is Outcome.DAILY_LIMIT_REACHED
+        assert PublicationRepository(connection).count() == 4
+
+    def test_a_story_already_drafted_by_an_earlier_slot_is_never_offered_to_a_later_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The 10:00 slot's story must not be a candidate again at 13:00 — real
+        cross-run dedup, not merely 'the daily limit happens to stop it', since with
+        limit=4 the limit alone would not have caught a repeat here."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, daily_post_limit=4)
+        first_article = seed_official_article(connection)
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": first_article.canonical_url},
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        first = run_automation(connection, settings, mode="live")
+        assert first.outcome is Outcome.PUBLISHED
+
+        # No new article seeded — the only thing in the pool is the one just drafted.
+        patch_clients(
+            monkeypatch, gemini_transport=fake_gemini_transport(), telegram_transport=None
+        )
+        second = run_automation(connection, settings, mode="live")
+        assert second.outcome is Outcome.NO_CANDIDATE
+        assert PublicationRepository(connection).count() == 1
+
+    def test_a_gemini_quota_failure_in_one_slot_fails_that_slot_only_and_sends_nothing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """More scheduled slots means more Gemini calls/day. A 429 in one slot must
+        fail that run cleanly (GEMINI_ERROR) — no Telegram send, no partial Draft left
+        approved — and must not prevent the next slot from trying normally afterward."""
+        connection = db(tmp_path)
+        settings = build_settings(tmp_path, daily_post_limit=4)
+        article = seed_official_article(connection)
+
+        def quota_exhausted(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(429, json={"error": {"message": "quota exceeded"}})
+
+        patch_clients(
+            monkeypatch,
+            gemini_transport=httpx.MockTransport(quota_exhausted),
+            telegram_transport=None,
+        )
+        failed_slot = run_automation(connection, settings, mode="live")
+        assert failed_slot.outcome is Outcome.GEMINI_ERROR
+        assert PublicationRepository(connection).count() == 0
+        assert DraftRepository(connection).find_by_article(article.id) is None
+
+        # The next slot, same day: a normal Gemini/Telegram round trip must still work.
+        patch_clients(
+            monkeypatch,
+            gemini_transport=fake_gemini_transport(
+                selection={"selected_id": "1"},
+                generation={**VALID_GENERATION, "source_url": article.canonical_url},
+            ),
+            telegram_transport=fake_telegram_transport(),
+        )
+        next_slot = run_automation(connection, settings, mode="live")
+        assert next_slot.outcome is Outcome.PUBLISHED
+        assert PublicationRepository(connection).count() == 1
+
+
 class TestGenerationSchemaContract:
     """The regression test for the actual production bug: two real GitHub Actions runs
     hit a Gemini generation response that was syntactically valid JSON but simply
