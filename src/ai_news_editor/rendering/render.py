@@ -316,16 +316,28 @@ def _with_length_warnings(post: RenderedPost, category: EditorialCategory) -> Re
     )
 
 
-def render_short_summary(content: EditorialContent) -> str:
+def render_short_summary(
+    content: EditorialContent, *, max_highlight_chars: int | None = None
+) -> str:
     """A short, self-contained caption: headline, one highlight, source link.
 
     Deterministically derived from the same ``content`` record ``render_editorial_post``
     uses — never a second, independently-generated summary that could drift from the
     full post's facts (see ``rendering.caption``, which uses this when the full post
     does not fit a media caption).
+
+    ``max_highlight_chars``, when given, truncates the *raw highlight text* (before
+    MarkdownV2 escaping) rather than the assembled string — so headline and source
+    always survive intact even in a pathological case where the highlight alone would
+    otherwise push the caption over Telegram's limit (see ``rendering.caption``'s
+    last-resort truncation, which needs the headline/source to still be there, not
+    clipped off by a blind end-of-string cut).
     """
     highlight = content.body[0]
-    text = f"{block_emoji(highlight.purpose)} {escape_markdown_v2(highlight.text)}"
+    highlight_text = highlight.text
+    if max_highlight_chars is not None and len(highlight_text) > max_highlight_chars:
+        highlight_text = highlight_text[: max(0, max_highlight_chars - 1)].rstrip() + "…"
+    text = f"{block_emoji(highlight.purpose)} {escape_markdown_v2(highlight_text)}"
     return _assemble(_headline(content), text, _source_line(content))
 
 

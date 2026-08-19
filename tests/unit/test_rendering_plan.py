@@ -104,9 +104,9 @@ class TestVideoWithFullCaption:
         assert [s.method for s in plan.steps] == ["sendVideo"]
 
 
-class TestPhotoShortCaptionThenText:
+class TestPhotoShortCaption:
     def _long_content(self) -> EditorialContent:
-        long_text = "Дуже детальний абзац з важливими фактами про подію. " * 30
+        long_text = "Дуже детальний абзац з важливими фактами про подію. " * 10
         return _content(
             body=(
                 BodyBlock(purpose="what_happened", text=long_text),
@@ -114,29 +114,72 @@ class TestPhotoShortCaptionThenText:
             )
         )
 
-    def test_a_long_post_with_a_photo_splits_into_two_steps(self, tmp_path: Path) -> None:
+    def test_a_long_post_with_a_photo_is_still_exactly_one_message(
+        self, tmp_path: Path
+    ) -> None:
+        """Step 6C single-post invariant: a post too long for the full caption is
+        shortened, never split into a second message."""
         with MediaWorkspace(root=tmp_path) as workspace:
             processed = _write_processed_media(workspace, MediaKind.IMAGE, "processed.jpg")
             outcome = MediaOutcome(media=processed)
             variant, plan = build_publication_plan(self._long_content(), outcome, workspace)
 
-        assert variant is PlanVariant.PHOTO_SHORT_CAPTION_THEN_TEXT
-        assert [s.method for s in plan.steps] == ["sendPhoto", "sendMessage"]
-        assert len(plan.steps[0].text or "") < len(plan.steps[1].text or "")
-        assert "Дуже детальний абзац" in (plan.steps[1].text or "")
+        assert variant is PlanVariant.PHOTO_SHORT_CAPTION
+        assert [s.method for s in plan.steps] == ["sendPhoto"]
+        assert len(plan.steps) == 1
 
 
-class TestVideoShortCaptionThenText:
-    def test_a_long_post_with_a_video_splits_into_two_steps(self, tmp_path: Path) -> None:
-        long_text = "Дуже детальний абзац з важливими фактами про подію. " * 30
-        content = _content(body=(BodyBlock(purpose="what_happened", text=long_text),))
+class TestVideoShortCaption:
+    def test_a_long_post_with_a_video_is_still_exactly_one_message(
+        self, tmp_path: Path
+    ) -> None:
+        long_text = "Дуже детальний абзац з важливими фактами про подію. " * 10
+        content = _content(
+            body=(
+                BodyBlock(purpose="what_happened", text=long_text),
+                BodyBlock(purpose="why_it_matters", text=long_text),
+            )
+        )
         with MediaWorkspace(root=tmp_path) as workspace:
             processed = _write_processed_media(workspace, MediaKind.VIDEO, "processed.mp4")
             outcome = MediaOutcome(media=processed)
             variant, plan = build_publication_plan(content, outcome, workspace)
 
-        assert variant is PlanVariant.VIDEO_SHORT_CAPTION_THEN_TEXT
-        assert [s.method for s in plan.steps] == ["sendVideo", "sendMessage"]
+        assert variant is PlanVariant.VIDEO_SHORT_CAPTION
+        assert [s.method for s in plan.steps] == ["sendVideo"]
+        assert len(plan.steps) == 1
+
+
+class TestSinglePostInvariant:
+    """Step 6C: every plan build_publication_plan can produce has exactly one step,
+    for every combination of media outcome and content length."""
+
+    def test_text_only_is_one_step(self, tmp_path: Path) -> None:
+        with MediaWorkspace(root=tmp_path) as workspace:
+            outcome = MediaOutcome(media=None, reason=RejectionReason.NO_CANDIDATES)
+            _variant, plan = build_publication_plan(_content(), outcome, workspace)
+        assert len(plan.steps) == 1
+
+    def test_photo_with_short_content_is_one_step(self, tmp_path: Path) -> None:
+        with MediaWorkspace(root=tmp_path) as workspace:
+            processed = _write_processed_media(workspace, MediaKind.IMAGE, "processed.jpg")
+            outcome = MediaOutcome(media=processed)
+            _variant, plan = build_publication_plan(_content(), outcome, workspace)
+        assert len(plan.steps) == 1
+
+    def test_photo_with_long_content_is_still_one_step(self, tmp_path: Path) -> None:
+        long_text = "Дуже детальний абзац з важливими фактами про подію. " * 10
+        content = _content(
+            body=(
+                BodyBlock(purpose="what_happened", text=long_text),
+                BodyBlock(purpose="why_it_matters", text=long_text),
+            )
+        )
+        with MediaWorkspace(root=tmp_path) as workspace:
+            processed = _write_processed_media(workspace, MediaKind.IMAGE, "processed.jpg")
+            outcome = MediaOutcome(media=processed)
+            _variant, plan = build_publication_plan(content, outcome, workspace)
+        assert len(plan.steps) == 1
 
 
 class TestAssetPathTraversalStillEnforced:

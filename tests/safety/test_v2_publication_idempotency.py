@@ -1,11 +1,17 @@
-"""Idempotency of a v2 (rendering.plan) publication plan — Step 5 section 37.
+"""Idempotency of a v2 (rendering.plan) publication plan — Step 5 section 37; updated
+in Step 6C for the single-post invariant.
 
 A BundlePlan built by rendering.plan.build_publication_plan() is exactly the same
 Step/Component/BundlePlan shape publishing/plan.py's own build_plan() produces, so it
 runs through the existing, already-tested publishing/rich.py execute()/remaining_steps()
-machinery unmodified. This file proves that specifically for the two new
-short-caption-then-text variants: if the media step succeeds and the text step fails,
-a resume must never resend the media.
+machinery unmodified.
+
+Step 6C removed the two-step "short caption on the photo, then the full post as a
+second message" variants entirely — a long post is now shortened to fit a single
+caption instead of ever producing a second Telegram message. This file now proves the
+single-post invariant itself (every plan is exactly one step, so there is nothing left
+to partially fail across two sends) and that a successful single-step publish is never
+resent on resume.
 """
 
 from __future__ import annotations
@@ -18,7 +24,6 @@ import httpx
 import pytest
 
 from ai_news_editor.domain.enums import DraftStatus, PublicationStatus
-from ai_news_editor.domain.errors import TelegramError
 from ai_news_editor.domain.models import Publication
 from ai_news_editor.media.models import DiscoveryMethod, MediaKind, MediaOutcome, ProcessedMedia
 from ai_news_editor.media.workspace import MediaWorkspace
@@ -60,7 +65,9 @@ class Recorder(httpx.MockTransport):
 
 
 def _long_content() -> EditorialContent:
-    long_text = "Дуже детальний абзац з важливими фактами про подію. " * 30
+    """Long enough that the full post would not fit a caption — proves the shortened
+    single-step path, never a second message, still round-trips through execute()."""
+    long_text = "Дуже детальний абзац з важливими фактами про подію. " * 10
     return EditorialContent(
         category="NEWS",  # type: ignore[arg-type]
         evidence="PRIMARY_SOURCE",  # type: ignore[arg-type]
@@ -113,8 +120,19 @@ def _placeholder_publication(
     )
 
 
-class TestPhotoPartialFailureIsNotResent:
-    def test_media_succeeds_text_fails_then_resume_sends_only_text(
+class TestSinglePostInvariantHolds:
+    def test_a_long_post_with_a_photo_is_exactly_one_plan_step(self, tmp_path: Path) -> None:
+        with MediaWorkspace(root=tmp_path) as workspace:
+            outcome = MediaOutcome(media=_processed_media(workspace))
+            variant, plan = build_publication_plan(_long_content(), outcome, workspace)
+
+        assert variant is PlanVariant.PHOTO_SHORT_CAPTION
+        assert len(plan.steps) == 1
+        assert plan.steps[0].component is Component.MAIN
+
+
+class TestPhotoPublishIsNotResentOnRetry:
+    def test_a_successful_photo_publish_is_never_resent(
         self,
         connection: sqlite3.Connection,
         seeded_article: Any,
@@ -124,81 +142,28 @@ class TestPhotoPartialFailureIsNotResent:
         with MediaWorkspace(root=tmp_path) as workspace:
             outcome = MediaOutcome(media=_processed_media(workspace))
             variant, plan = build_publication_plan(_long_content(), outcome, workspace)
-            assert variant is PlanVariant.PHOTO_SHORT_CAPTION_THEN_TEXT
+            assert variant is PlanVariant.PHOTO_SHORT_CAPTION
 
             draft, stored = _stored_draft(connection, drafts, seeded_article)
             publication = _placeholder_publication(connection, draft, stored)
 
-            transport = Recorder(failures={"sendMessage": "fail"})
-            with TelegramClient(TOKEN, transport=transport) as client, pytest.raises(TelegramError):
+            transport = Recorder()
+            with TelegramClient(TOKEN, transport=transport) as client:
                 execute(
                     connection, client, plan, stored,
                     publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
                     discussion_chat_id=None, media_root=workspace.root,
                 )
 
-            components = ComponentRepository(connection)
-            assert Component.MEDIA in components.succeeded(stored.id)
-            assert Component.MAIN not in components.succeeded(stored.id)
             assert transport.count("sendPhoto") == 1
-
-            # A retry must see only the text step as outstanding.
-            todo, unknown = remaining_steps(connection, plan, stored)
-            assert [s.component for s in todo] == [Component.MAIN]
-            assert unknown == set()
-
-            retry_transport = Recorder()
-            with TelegramClient(TOKEN, transport=retry_transport) as client:
-                execute(
-                    connection, client, plan, stored,
-                    publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
-                    discussion_chat_id=None, media_root=workspace.root,
-                )
-
-            # The retry only ever calls sendMessage — the photo is never resent.
-            assert retry_transport.count("sendPhoto") == 0
-            assert retry_transport.count("sendMessage") == 1
+            assert transport.calls == ["sendPhoto"]  # never a second, follow-up send
             assert Component.MAIN in ComponentRepository(connection).succeeded(stored.id)
 
+            todo, unknown = remaining_steps(connection, plan, stored)
+            assert todo == ()
+            assert unknown == set()
 
-class TestVideoPartialFailureIsNotResent:
-    def test_media_succeeds_text_fails_then_resume_sends_only_text(
-        self,
-        connection: sqlite3.Connection,
-        seeded_article: Any,
-        drafts: DraftRepository,
-        tmp_path: Path,
-    ) -> None:
-        with MediaWorkspace(root=tmp_path) as workspace:
-            path = workspace.path("processed.mp4")
-            path.write_bytes(b"fake-mp4")
-            processed = ProcessedMedia(
-                path=str(path), kind=MediaKind.VIDEO, width=1200, height=630,
-                size_bytes=path.stat().st_size, source_url="https://blog.google/clip.mp4",
-                source_method=DiscoveryMethod.OPEN_GRAPH_VIDEO,
-            )
-            outcome = MediaOutcome(media=processed)
-            variant, plan = build_publication_plan(_long_content(), outcome, workspace)
-            assert variant is PlanVariant.VIDEO_SHORT_CAPTION_THEN_TEXT
-
-            draft, stored = _stored_draft(connection, drafts, seeded_article)
-            publication = _placeholder_publication(connection, draft, stored)
-
-            transport = Recorder(failures={"sendMessage": "fail"})
-            with TelegramClient(TOKEN, transport=transport) as client, pytest.raises(TelegramError):
-                execute(
-                    connection, client, plan, stored,
-                    publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
-                    discussion_chat_id=None, media_root=workspace.root,
-                )
-
-            components = ComponentRepository(connection)
-            assert Component.MEDIA in components.succeeded(stored.id)
-            assert transport.count("sendVideo") == 1
-
-            todo, _unknown = remaining_steps(connection, plan, stored)
-            assert [s.component for s in todo] == [Component.MAIN]
-
+            # A resume/retry call must not resend anything at all.
             retry_transport = Recorder()
             with TelegramClient(TOKEN, transport=retry_transport) as client:
                 execute(
@@ -206,9 +171,7 @@ class TestVideoPartialFailureIsNotResent:
                     publication_id=publication.id, draft_id=draft.id, channel=CHANNEL,
                     discussion_chat_id=None, media_root=workspace.root,
                 )
-
-            assert retry_transport.count("sendVideo") == 0
-            assert retry_transport.count("sendMessage") == 1
+            assert retry_transport.calls == []
 
 
 class TestTextOnlyIdempotency:
@@ -223,6 +186,7 @@ class TestTextOnlyIdempotency:
             outcome = MediaOutcome(media=None)
             variant, plan = build_publication_plan(_long_content(), outcome, workspace)
             assert variant is PlanVariant.TEXT_ONLY
+            assert len(plan.steps) == 1
 
             draft, stored = _stored_draft(connection, drafts, seeded_article)
             publication = _placeholder_publication(connection, draft, stored)
