@@ -27,10 +27,27 @@ from ai_news_editor.domain.enums import (
     TrustTier,
 )
 from ai_news_editor.editorial.diversity import RecentPost
+from ai_news_editor.media.models import DiscoveryMethod
 from ai_news_editor.media.workspace import MediaWorkspace
 from ai_news_editor.sources.config import SourceDefinition
+from ai_news_editor.sources.http import HttpClient
 
 FAKE_KEY = "fake-test-key"
+
+
+def _no_op_media_http() -> HttpClient:
+    """No Google source and no Commons match in these tests, so this transport is
+    never expected to be asked for anything relevant — it exists only so the media
+    strategy's own network calls (layers A/B) have somewhere safe and offline to land,
+    never a real request during a unit test."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "commons.wikimedia.org" in str(request.url):
+            return httpx.Response(200, json={"query": {"pages": {}}})
+        return httpx.Response(404)
+
+    return HttpClient(transport=httpx.MockTransport(handler))
+
 
 _CLASSIFICATION_PAYLOAD = {
     "content_type": "NEWS",
@@ -86,6 +103,7 @@ def _source(source_id: str, **overrides: object) -> SourceDefinition:
         "editorial_role": "test",
         "priority": "PRIMARY_NORMAL",
         "content_types": (ContentCapability.NEWS,),
+        "publisher_region": "UNITED_STATES",
     }
     data.update(overrides)
     return SourceDefinition.model_validate(data)
@@ -164,6 +182,7 @@ class TestRunPipelineV2GeminiCallBudget:
                 sources_by_id=sources,
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )
 
         assert outcome.gemini_calls == 1
@@ -184,6 +203,7 @@ class TestRunPipelineV2GeminiCallBudget:
                 sources_by_id=sources,
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )
 
         assert outcome.gemini_calls == 2
@@ -191,7 +211,12 @@ class TestRunPipelineV2GeminiCallBudget:
         assert outcome.classification.content_type is EditorialCategory.NEWS
         assert len(transport.calls) == 2  # type: ignore[attr-defined]
 
-    def test_no_media_candidates_still_succeeds_as_text_only(self, tmp_path) -> None:
+    def test_no_source_discovered_media_still_succeeds_via_the_branded_card_fallback(
+        self, tmp_path
+    ) -> None:
+        """Step 6B: a NO_MEDIA source no longer means a text-only post — the branded
+        card is the universal safe fallback, so media.ok is True here, drawn locally
+        rather than discovered from anywhere."""
         candidate = _candidate(
             editorial_category=EditorialCategory.NEWS,
             evidence_type=EditorialEvidence.PRIMARY_SOURCE,
@@ -207,9 +232,11 @@ class TestRunPipelineV2GeminiCallBudget:
                 sources_by_id=sources,
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )
 
-        assert outcome.media.ok is False
+        assert outcome.media.ok is True
+        assert outcome.media.media.source_method is DiscoveryMethod.GENERATED_CARD
         assert outcome.rendered.full_text  # text still renders regardless
 
 
@@ -227,6 +254,7 @@ class TestRejection:
                 sources_by_id={},
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )
 
     def test_a_generation_rejection_propagates_as_orchestration_rejected(self, tmp_path) -> None:
@@ -252,4 +280,5 @@ class TestRejection:
                 sources_by_id=sources,
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )

@@ -20,6 +20,7 @@ already established), and is never invoked by the unattended cron workflow.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from uuid import UUID
@@ -44,12 +45,14 @@ from ai_news_editor.editorial.diversity import RecentPost
 from ai_news_editor.editorial.preview import PreviewCandidate, build_preview
 from ai_news_editor.editorial.primary_source import prefer_primary_sources
 from ai_news_editor.media.models import MediaOutcome
-from ai_news_editor.media.pipeline import select_media
+from ai_news_editor.media.strategy import select_media_with_fallbacks
 from ai_news_editor.media.workspace import MediaWorkspace
 from ai_news_editor.observability.logging import get_logger
 from ai_news_editor.rendering.content import EditorialContent
 from ai_news_editor.rendering.render import RenderedPost, render_editorial_post
 from ai_news_editor.sources.config import SourceDefinition
+from ai_news_editor.sources.geography import is_source_eligible
+from ai_news_editor.sources.http import HttpClient
 
 logger = get_logger(__name__)
 
@@ -134,6 +137,12 @@ def select_top_candidate(
     (Step 2/3 ``sources.capability``) and diversity (Step 3 ``editorial.diversity``,
     fed by real recent history) logic Step 3 already built and Step 5 section 28-29
     asks to be *wired into selection*, not just displayed. Zero Gemini calls.
+
+    Step 6B: also filters by the source geography allowlist (``sources.geography``)
+    here, locally and deterministically — a second, defense-in-depth layer on top of
+    whatever pre-filtering a caller (e.g. ``automation.soak``) already did, so a future
+    caller that forgets its own geography filter still cannot offer an ineligible
+    source's candidate to Gemini selection.
     """
     by_article_id = {c.article_id: c for c in candidates}
     preview_candidates = [
@@ -148,7 +157,13 @@ def select_top_candidate(
         for c in candidates
     ]
     rows = build_preview(preview_candidates, sources_by_id, recent)
-    capable = [row for row in rows if row.capability_ok]
+    capable = [
+        row
+        for row in rows
+        if row.capability_ok
+        and row.candidate.source_id in sources_by_id
+        and is_source_eligible(sources_by_id[row.candidate.source_id])
+    ]
     if not capable:
         return None
     return by_article_id[capable[0].candidate.article_id]
@@ -161,6 +176,7 @@ def run_pipeline_v2(
     sources_by_id: Mapping[str, SourceDefinition],
     recent: Sequence[RecentPost],
     workspace: MediaWorkspace,
+    http: HttpClient,
 ) -> OrchestrationOutcome:
     """Run the full v2 pipeline for the single best candidate in ``candidates``.
 
@@ -171,6 +187,11 @@ def run_pipeline_v2(
     ``ArticleContext`` input does not carry itself. A caller assembling ``candidates``
     from the database should always do that collapse first, so only one
     representative of any given story ever reaches this ranking step.
+
+    ``http`` is Step 6B's addition — the full four-layer media strategy
+    (``media.strategy.select_media_with_fallbacks``) needs a real HTTP client for its
+    licensed-first-party and open-license-provider layers, unlike the Step 5 media
+    selection this replaces, which only ever read what the caller already fetched.
 
     Raises:
         OrchestrationRejected: no candidate was capability-eligible, or the winning
@@ -215,10 +236,16 @@ def run_pipeline_v2(
     )
     rendered = render_editorial_post(content)
 
-    media_outcome = select_media(
+    media_outcome = select_media_with_fallbacks(
         workspace=workspace,
+        http=http,
+        source_id=top.source_id,
         source_url=top.source_url,
         media_policy=sources_by_id[top.source_id].media_policy,
+        category=category,
+        headline=content.headline,
+        source_label=top.source_label,
+        story_keywords=_story_keywords(content.headline, top.source_label),
         feed_payload_raw=top.feed_payload_raw,
         html=top.html,
     )
@@ -239,6 +266,32 @@ def run_pipeline_v2(
         classification=classification,
         gemini_calls=gemini_calls,
     )
+
+
+#: A capitalized Latin-script word or run of them — how a brand/product name usually
+#: stays untranslated inside an otherwise-Ukrainian headline ("Google", "ChatGPT",
+#: "OpenAI Sora"). This is a keyword *hint* for the media strategy's relevance
+#: matching, not a translation or an NLP step — matching ``media.licensed_assets`` and
+#: ``media.open_license``'s own plain substring matching.
+_LATIN_PROPER_NOUN = re.compile(r"[A-Z][A-Za-z0-9]*(?:\s[A-Z][A-Za-z0-9]*)*")
+
+
+def _story_keywords(headline: str, source_label: str) -> list[str]:
+    """Short, specific terms for the media strategy's relevance matching — the
+    source's own name plus any Latin-script proper nouns the headline itself names.
+    Deliberately not the whole headline: a single generic word ("новий", "AI") would
+    match almost anything, defeating the point of a relevance check.
+    """
+    found = _LATIN_PROPER_NOUN.findall(headline)
+    keywords = [source_label, *found]
+    seen: set[str] = set()
+    unique: list[str] = []
+    for keyword in keywords:
+        normalized = keyword.strip()
+        if normalized and normalized.lower() not in seen:
+            seen.add(normalized.lower())
+            unique.append(normalized)
+    return unique
 
 
 __all__ = [

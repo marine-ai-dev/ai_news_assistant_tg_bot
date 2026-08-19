@@ -31,9 +31,19 @@ from ai_news_editor.domain.enums import (
 from ai_news_editor.domain.models import Article
 from ai_news_editor.media.workspace import MediaWorkspace
 from ai_news_editor.sources.config import SourceDefinition
+from ai_news_editor.sources.http import HttpClient
 from tests.conftest import make_article
 
 FAKE_KEY = "fake-test-key"
+
+
+def _no_op_media_http() -> HttpClient:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "commons.wikimedia.org" in str(request.url):
+            return httpx.Response(200, json={"query": {"pages": {}}})
+        return httpx.Response(404)
+
+    return HttpClient(transport=httpx.MockTransport(handler))
 
 _GENERATION_PAYLOAD = {
     "headline": "ExampleCorp запускає Product X",
@@ -76,6 +86,7 @@ def _source(source_id: str, *, trust_tier: TrustTier) -> SourceDefinition:
             "editorial_role": "test",
             "priority": "PRIMARY_NORMAL" if trust_tier is TrustTier.OFFICIAL else "DISCOVERY",
             "content_types": (ContentCapability.NEWS,),
+            "publisher_region": "UNITED_STATES",
         }
     )
 
@@ -137,6 +148,7 @@ class TestPrimarySourcePreferenceEndToEnd:
                 sources_by_id=sources,
                 recent=[],
                 workspace=workspace,
+                http=_no_op_media_http(),
             )
 
         assert outcome.content.source_url == official.canonical_url

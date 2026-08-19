@@ -240,6 +240,7 @@ def auto_soak_v2(
         )
         raise typer.Exit(code=2)
 
+    from ai_news_editor.automation import test_history
     from ai_news_editor.automation.gemini import GeminiClient
     from ai_news_editor.automation.pipeline import isolated_connection
     from ai_news_editor.automation.soak import run_soak
@@ -299,6 +300,7 @@ def auto_soak_v2(
                     target_channel=settings.test_channel,
                     count=count,
                     prefer_category=category,
+                    test_history_path=settings.data_dir / test_history.DEFAULT_FILENAME,
                     recent_seed=recent_seed,
                 )
     finally:

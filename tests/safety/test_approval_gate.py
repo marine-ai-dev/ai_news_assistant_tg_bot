@@ -684,6 +684,22 @@ class TestNoIntegrationsExist:
             # straight through to media/download.py's own client for tests) — it makes
             # no request of its own; the actual boundary is the entry above.
             "media/pipeline.py",
+            # Step 6B: media/licensed_assets.py's own network call (fetching the
+            # Google Press Corner page) goes through sources/http.py's HttpClient —
+            # its httpx import is only the transport type hint for the downstream
+            # download step, same reasoning as media/pipeline.py above.
+            "media/licensed_assets.py",
+            # Step 6B: media/open_license.py's own network call (Wikimedia Commons'
+            # search API) goes through sources/http.py's HttpClient, the same existing
+            # boundary sources/fulltext.py already uses — its httpx import is only the
+            # transport type hint for media/download.py's downstream download step.
+            "media/open_license.py",
+            # Step 6B: media/strategy.py composes the four media layers and makes its
+            # own Press Corner page fetch through sources/http.py's HttpClient — same
+            # boundary, same reasoning as media/open_license.py above. Its httpx
+            # import is only the transport type hint threaded through to each layer's
+            # own download step.
+            "media/strategy.py",
         }
         import re
 

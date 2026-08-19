@@ -22,8 +22,10 @@ from __future__ import annotations
 import sqlite3
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
+from ai_news_editor.automation import test_history
 from ai_news_editor.automation.gemini import GeminiClient
 from ai_news_editor.automation.pipeline_v2 import (
     ArticleContext,
@@ -44,6 +46,7 @@ from ai_news_editor.rendering.plan import PlanVariant, build_publication_plan
 from ai_news_editor.sources.capability import allows_category
 from ai_news_editor.sources.config import SourcesConfig
 from ai_news_editor.sources.fulltext import fetch_fulltext
+from ai_news_editor.sources.geography import is_source_eligible
 from ai_news_editor.sources.http import HttpClient, HttpError
 from ai_news_editor.sources.http import UnsafeUrlError as UnsafeArticleUrlError
 from ai_news_editor.storage.repositories import (
@@ -68,11 +71,18 @@ def eligible_articles_v2(
     connection: sqlite3.Connection,
     *,
     exclude_article_ids: frozenset[UUID] = frozenset(),
+    exclude_source_urls: frozenset[str] = frozenset(),
     limit: int = 60,
 ) -> list[Article]:
     """Real, already-normalized articles not yet drafted or evaluated.
 
     Every trust tier — unlike the live v1 pool, which is OFFICIAL-only. Newest first.
+
+    ``exclude_source_urls`` is how cross-run test dedup (``automation.test_history``)
+    keeps two independent ``--test`` soak invocations from picking the same article —
+    each ephemeral in-memory copy starts from an identical canonical snapshot with no
+    memory of its own of what an earlier run already sent, so that memory has to come
+    from outside the database entirely (see that module's own docstring).
     """
     articles = ArticleRepository(connection)
     drafts = DraftRepository(connection)
@@ -84,6 +94,8 @@ def eligible_articles_v2(
     eligible: list[Article] = []
     for article in rows:
         if article.id in exclude_article_ids:
+            continue
+        if article.canonical_url in exclude_source_urls:
             continue
         if drafts.find_by_article(article.id) is not None:
             continue
@@ -164,6 +176,7 @@ def run_soak(
     prefer_category: EditorialCategory | None = None,
     recent_seed: list[RecentPost] | None = None,
     delay_seconds: float = DEFAULT_DELAY_SECONDS,
+    test_history_path: Path | None = None,
 ) -> list[SoakPostResult]:
     """Send up to ``count`` real posts to ``target_channel``, one at a time.
 
@@ -177,8 +190,16 @@ def run_soak(
     registry entry declares that category's capability — never forces the pipeline's
     real classification result, and falls back to the unfiltered pool if nothing
     matches (never blocks the batch on an unmet preference).
+
+    ``test_history_path``, if given, makes this run cross-run-aware: articles already
+    recorded there are excluded from the pool up front, and every real send is
+    recorded there too — see ``automation.test_history`` for why an ephemeral
+    in-memory ``--test`` database cannot provide this memory on its own.
     """
     sources_by_id = {source.id: source for source in registry.sources}
+    already_sent_urls = frozenset(
+        entry.source_url for entry in test_history.load(test_history_path)
+    ) if test_history_path is not None else frozenset()
 
     def trust_tier_of(article: Article) -> TrustTier:
         source = sources_by_id.get(article.source_id)
@@ -192,12 +213,31 @@ def run_soak(
     attempts = 0
     while len(results) < count and attempts < max_attempts:
         attempts += 1
-        pool = eligible_articles_v2(connection, exclude_article_ids=frozenset(used))
+        pool = eligible_articles_v2(
+            connection,
+            exclude_article_ids=frozenset(used),
+            exclude_source_urls=already_sent_urls,
+        )
         if not pool:
             logger.info("soak_exhausted", extra={"posts_sent": len(results)})
             break
 
         pool = collapse_to_primary_sources(pool, trust_tier_of)
+
+        # Step 6B: geography allowlist enforced here, locally and deterministically,
+        # before any candidate reaches Gemini selection — never left to Gemini, and
+        # never based on the article's subject, only the source's own reviewed origin.
+        geography_ineligible = {
+            article.id
+            for article in pool
+            if article.source_id not in sources_by_id
+            or not is_source_eligible(sources_by_id[article.source_id])
+        }
+        if geography_ineligible:
+            used.update(geography_ineligible)
+            pool = [a for a in pool if a.id not in geography_ineligible]
+        if not pool:
+            continue
 
         if prefer_category is not None:
             narrowed = [
@@ -228,6 +268,7 @@ def run_soak(
                     sources_by_id=sources_by_id,
                     recent=recent,
                     workspace=workspace,
+                    http=http,
                 )
             except OrchestrationRejected as exc:
                 logger.info("soak_candidate_rejected", extra={"reason": str(exc)})
@@ -249,6 +290,12 @@ def run_soak(
             contexts[0].article_id,
         )
         used.add(used_article_id)
+        if test_history_path is not None:
+            test_history.record(
+                test_history_path,
+                source_url=outcome.content.source_url,
+                message_id=main_message_id,
+            )
         source_family = sources_by_id.get(
             next(c.source_id for c in contexts if c.article_id == used_article_id)
         )

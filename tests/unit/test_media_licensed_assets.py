@@ -105,18 +105,9 @@ class TestDownloadAndProcessPressCornerAsset:
 
         import socket
 
-        from ai_news_editor.media.download import download_media as real_download_media
-
         monkeypatch.setattr(
             socket, "getaddrinfo", lambda *a, **k: [(0, 0, 0, "", ("93.184.216.34", 0))]
         )
-
-        import ai_news_editor.media.licensed_assets as licensed_assets_module
-
-        def fake_download_media(url, dest, *, kind):  # type: ignore[no-untyped-def]
-            return real_download_media(url, dest, kind=kind, transport=httpx.MockTransport(handler))
-
-        monkeypatch.setattr(licensed_assets_module, "download_media", fake_download_media)
 
         source_id = next(iter(GOOGLE_SOURCE_IDS))
         with MediaWorkspace(root=tmp_path) as workspace:
@@ -125,6 +116,7 @@ class TestDownloadAndProcessPressCornerAsset:
                 story_keywords=["Sundar Pichai"],
                 press_corner_html=_LIBRARY_HTML,
                 workspace=workspace,
+                transport=httpx.MockTransport(handler),
             )
 
         assert outcome.ok is True

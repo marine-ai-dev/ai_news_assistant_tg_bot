@@ -38,6 +38,16 @@ class DiscoveryMethod(StrEnum):
     #: Never used for an ordinary article page; only for a page whose own stated terms
     #: were hand-verified to permit exactly this.
     LICENSED_LIBRARY = "LICENSED_LIBRARY"
+    #: Step 6B: not discovered anywhere — drawn locally by
+    #: ``media.branded_card.generate_branded_card``, from the post's own category,
+    #: headline and source label. The "universal safe fallback": always available,
+    #: never a copyright question, never blocks publication.
+    GENERATED_CARD = "GENERATED_CARD"
+    #: Step 6B: a verified open-license media provider (see ``media.open_license``) —
+    #: found via that provider's own search API, not scraped, and only ever a
+    #: candidate whose license was actually checked field-by-field, never assumed from
+    #: "it's on Wikimedia" alone.
+    OPEN_LICENSE_PROVIDER = "OPEN_LICENSE_PROVIDER"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +97,14 @@ class RejectionReason(StrEnum):
 @dataclass(frozen=True, slots=True)
 class ProcessedMedia:
     """One successfully downloaded, validated and compressed local file, ready to
-    hand to the publishing layer."""
+    hand to the publishing layer.
+
+    The five attribution fields below default to ``None`` for a source-discovered
+    image (``rendering.plan`` builds its own attribution from ``source_url`` for
+    those, unchanged) — they exist so an open-license provider (Step 6B,
+    ``media.open_license``) can carry its *real*, checked attribution structurally,
+    never fabricated and never inferred from "it's probably fine."
+    """
 
     path: str
     kind: MediaKind
@@ -96,6 +113,17 @@ class ProcessedMedia:
     size_bytes: int
     source_url: str
     source_method: DiscoveryMethod
+    #: e.g. "Wikimedia Commons" — who this asset actually came from.
+    media_provider: str | None = None
+    #: The named creator/author, as the provider itself records it.
+    creator: str | None = None
+    #: The license's short name (e.g. "CC BY-SA 4.0"), as the provider itself records it.
+    license: str | None = None
+    #: A link to the actual license text, when the provider gives one.
+    license_url: str | None = None
+    #: The exact credit line the license requires — carried verbatim so a caller never
+    #: has to reconstruct or guess a legally-required attribution string.
+    required_credit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

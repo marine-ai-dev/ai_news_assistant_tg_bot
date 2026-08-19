@@ -114,6 +114,7 @@ def _registry() -> SourcesConfig:
                     "editorial_role": "test",
                     "priority": "PRIMARY_NORMAL",
                     "content_types": ["NEWS"],
+                    "publisher_region": "UNITED_STATES",
                 },
                 {
                     "id": "second_vendor",
@@ -124,6 +125,7 @@ def _registry() -> SourcesConfig:
                     "editorial_role": "test",
                     "priority": "PRIMARY_NORMAL",
                     "content_types": ["NEWS"],
+                    "publisher_region": "UNITED_STATES",
                 },
             ],
         }
@@ -161,6 +163,14 @@ class TestEligibleArticlesV2:
         eligible = eligible_articles_v2(connection)
         excluded = frozenset({eligible[0].id})
         assert eligible_articles_v2(connection, exclude_article_ids=excluded) == []
+
+    def test_excludes_articles_by_source_url(self, connection) -> None:  # type: ignore[no-untyped-def]
+        """Step 6C: cross-run test dedup (automation.test_history) excludes by URL,
+        not by article id — a fresh ephemeral DB copy has no memory of an id from an
+        earlier process, but the underlying article's canonical_url is stable."""
+        _seed_article(connection, "official_vendor", "https://vendor.example.invalid/1", "Story A")
+        excluded_urls = frozenset({"https://vendor.example.invalid/1"})
+        assert eligible_articles_v2(connection, exclude_source_urls=excluded_urls) == []
 
 
 class TestRunSoakEndToEnd:
@@ -220,3 +230,46 @@ class TestRunSoakEndToEnd:
         )
 
         assert len(results) == 1
+
+    def test_a_second_run_with_the_same_test_history_never_resends_the_same_story(
+        self, connection, tmp_path
+    ) -> None:  # type: ignore[no-untyped-def]
+        """Step 6C: the exact bug the channel visually reported — two independent
+        soak runs picking the same article and posting it twice. test_history.py
+        makes a second run (even against a fresh ephemeral DB copy, simulated here by
+        reusing the same connection but relying only on the history file) skip
+        whatever the first run already sent."""
+        _seed_article(
+            connection, "official_vendor", "https://vendor.example.invalid/only-story", "Only story"
+        )
+        registry = _registry()
+        history_path = tmp_path / "test_publish_history.json"
+
+        first_run = run_soak(
+            connection,
+            client=GeminiClient(FAKE_KEY, model="gemini-test", transport=_gemini_transport()),
+            registry=registry,
+            http=HttpClient(transport=_article_http_transport()),
+            telegram=TelegramClient(TOKEN, transport=_telegram_transport()),
+            target_channel=CHANNEL,
+            count=1,
+            delay_seconds=0.0,
+            test_history_path=history_path,
+        )
+        assert len(first_run) == 1
+
+        # A second run against the very same (still-unmarked-used, in the real
+        # ephemeral-DB sense) article must find nothing left to send, because the
+        # history file — not the database — remembers it was already sent.
+        second_run = run_soak(
+            connection,
+            client=GeminiClient(FAKE_KEY, model="gemini-test", transport=_gemini_transport()),
+            registry=registry,
+            http=HttpClient(transport=_article_http_transport()),
+            telegram=TelegramClient(TOKEN, transport=_telegram_transport()),
+            target_channel=CHANNEL,
+            count=1,
+            delay_seconds=0.0,
+            test_history_path=history_path,
+        )
+        assert second_run == []

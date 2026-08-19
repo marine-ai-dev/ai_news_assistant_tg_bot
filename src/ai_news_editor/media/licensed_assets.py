@@ -22,6 +22,8 @@ image. The required credit line travels with the asset every time it is used.
 
 from __future__ import annotations
 
+import httpx
+
 from ai_news_editor.media.discover import discover_licensed_library_assets
 from ai_news_editor.media.download import download_media
 from ai_news_editor.media.image import process_image
@@ -49,12 +51,20 @@ GOOGLE_SOURCE_IDS = frozenset({"google_ai_blog", "google_deepmind", "google_rese
 
 
 def download_and_process_press_corner_asset(
-    *, source_id: str, story_keywords: list[str], press_corner_html: str, workspace: MediaWorkspace
+    *,
+    source_id: str,
+    story_keywords: list[str],
+    press_corner_html: str,
+    workspace: MediaWorkspace,
+    transport: httpx.BaseTransport | None = None,
 ) -> MediaOutcome:
     """The full narrow path: discover -> download -> process, or an honest reason why not.
 
     Never falls back to an unrelated image. A caller that gets a non-``.ok`` outcome
     here should fall back to text-only, exactly like any other media outcome.
+
+    ``transport`` matches ``media.pipeline.select_media``'s own parameter of the same
+    name — ``None`` means a real connection; tests pass an ``httpx.MockTransport``.
     """
     if source_id not in GOOGLE_SOURCE_IDS:
         return MediaOutcome(media=None, reason=RejectionReason.POLICY_FORBIDS)
@@ -72,7 +82,10 @@ def download_and_process_press_corner_asset(
     candidate = candidates[0]
     try:
         download = download_media(
-            candidate.url, workspace.path("press-corner-original.jpg"), kind="image"
+            candidate.url,
+            workspace.path("press-corner-original.jpg"),
+            kind="image",
+            transport=transport,
         )
         processed = process_image(
             download.path, workspace.path("press-corner-processed.jpg"),

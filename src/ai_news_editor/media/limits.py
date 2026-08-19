@@ -76,6 +76,13 @@ MAX_DOWNLOAD_REDIRECTS = 3
 MIN_CANDIDATE_WIDTH = 200
 MIN_CANDIDATE_HEIGHT = 200
 
+# --- Branded card generation (Step 6B) — the locally-generated, universal fallback ---
+
+#: A 16:9 canvas, comfortably within Telegram's photo rendering — not a real photo's
+#: dimensions, an editorial asset's, so it is not sized to mimic one.
+BRANDED_CARD_WIDTH = 1200
+BRANDED_CARD_HEIGHT = 675
+
 # --- Video processing (ffmpeg) ------------------------------------------------------
 
 #: Hard wall-clock budget for one ffmpeg transcode. No infinite process: a hang is
@@ -84,6 +91,8 @@ FFMPEG_TIMEOUT_SECONDS = 120.0
 FFPROBE_TIMEOUT_SECONDS = 15.0
 
 __all__ = [
+    "BRANDED_CARD_HEIGHT",
+    "BRANDED_CARD_WIDTH",
     "DOWNLOAD_CONNECT_TIMEOUT_SECONDS",
     "DOWNLOAD_READ_TIMEOUT_SECONDS",
     "FFMPEG_TIMEOUT_SECONDS",
