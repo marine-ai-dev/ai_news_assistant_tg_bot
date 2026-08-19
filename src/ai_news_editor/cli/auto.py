@@ -332,6 +332,120 @@ def auto_soak_v2(
     console.print(table)
 
 
+@auto_app.command("publish-v2-production")
+def auto_publish_v2_production(
+    live: Annotated[
+        bool,
+        typer.Option(
+            "--live",
+            help="Required. This command targets the real production Telegram channel.",
+        ),
+    ] = False,
+    confirm: Annotated[
+        bool,
+        typer.Option(
+            "--confirm",
+            help="Required in addition to --live. A second explicit flag for an "
+            "action that publishes to real production and cannot be undone.",
+        ),
+    ] = False,
+) -> None:
+    """One manual, unscheduled v2 post to the REAL production Telegram channel.
+
+    NOT part of the schedule and NOT gated the same way as ``auto once`` — this is a
+    human-authorized one-off, so it still checks ``AI_NEWS_AUTOMATION_ENABLED`` (the
+    same kill switch the scheduled job respects) but does not touch cron, the daily
+    limit, or any other production configuration. Sends at most one message: the first
+    real, eligible, geography/dystopian-filtered, non-NEWS/non-RESEARCH candidate,
+    preferring AI_LIFEHACK, then AI_TOOL, PROMPT_WORKFLOW, FREE_DEAL, EXPLAINER, in
+    that order (a soft preference — real classification still decides). See
+    ``automation.publish_v2_production`` for why this never routes through
+    ``publishing.service`` (v1's re-render-at-send-time path is incompatible with v2's
+    already-rendered content).
+    """
+    if not (live and confirm):
+        err_console.print(
+            "[bold red]Both --live and --confirm are required.[/bold red] This "
+            "command sends to the real production channel and cannot be undone."
+        )
+        raise typer.Exit(code=2)
+
+    from ai_news_editor.automation.gemini import GeminiClient
+    from ai_news_editor.automation.publish_v2_production import (
+        NoEligibleCandidateError,
+        publish_one_v2_post_to_production,
+    )
+    from ai_news_editor.cli.main import open_migrated_database
+    from ai_news_editor.domain.enums import EditorialCategory
+    from ai_news_editor.publishing.telegram import TelegramClient
+    from ai_news_editor.sources.config import load_sources_config
+    from ai_news_editor.sources.http import HttpClient
+
+    settings = _settings()
+    if not settings.automation_enabled:
+        err_console.print(
+            "[bold red]AI_NEWS_AUTOMATION_ENABLED is not set.[/bold red] This command "
+            "respects the same kill switch the scheduled job does."
+        )
+        raise typer.Exit(code=2)
+    if not settings.telegram_channel:
+        err_console.print(
+            "[bold red]AI_NEWS_TELEGRAM_CHANNEL is not configured.[/bold red] This "
+            "command refuses to guess a destination."
+        )
+        raise typer.Exit(code=2)
+
+    canonical = open_migrated_database()
+    try:
+        registry = load_sources_config(settings.sources_config_path)
+        client = GeminiClient(
+            settings.gemini_api_key.get_secret_value(), model=settings.llm_model
+        )
+        with (
+            HttpClient() as http,
+            TelegramClient(settings.telegram_bot_token.get_secret_value()) as telegram,
+        ):
+            try:
+                result = publish_one_v2_post_to_production(
+                    canonical,
+                    client=client,
+                    registry=registry,
+                    http=http,
+                    telegram=telegram,
+                    target_channel=settings.telegram_channel,
+                    category_preference=(
+                        EditorialCategory.AI_LIFEHACK,
+                        EditorialCategory.AI_TOOL,
+                        EditorialCategory.PROMPT_WORKFLOW,
+                        EditorialCategory.FREE_DEAL,
+                        EditorialCategory.EXPLAINER,
+                    ),
+                )
+            except NoEligibleCandidateError as exc:
+                err_console.print(f"[yellow]{exc}[/yellow]")
+                raise typer.Exit(code=0) from None
+    finally:
+        canonical.close()
+
+    message_ids = ", ".join(
+        str(c.message_id) for c in result.component_outcomes if c.message_id is not None
+    )
+    table = Table(title=f"Published to {settings.telegram_channel}")
+    table.add_column("Category")
+    table.add_column("Source")
+    table.add_column("Headline")
+    table.add_column("Plan")
+    table.add_column("Message ID(s)")
+    table.add_row(
+        result.outcome.content.category.value,
+        result.source_id,
+        result.outcome.content.headline,
+        result.variant.value,
+        message_ids,
+    )
+    console.print(table)
+
+
 @auto_app.command("stats")
 def auto_stats() -> None:
     """How much gemini:auto activity is on record. Read-only."""
