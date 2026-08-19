@@ -194,7 +194,10 @@ class TestCollectCommand:
             "    adapter: rss\n"
             f"    url: {url}\n"
             "    trust_tier: OFFICIAL\n"
-            "    editorial_role: Test source for the CLI.\n",
+            "    editorial_role: Test source for the CLI.\n"
+            "    priority: PRIMARY_NORMAL\n"
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n",
             encoding="utf-8",
         )
         return path
@@ -339,6 +342,141 @@ class TestSourcesCommand:
             "hackernews",
         ):
             assert source_id in output
+
+
+class TestSourcesDoctorCommand:
+    """``ai-news sources doctor`` — mocked transports only. Real endpoint verification
+    is a separate, explicit smoke test (see docs/sources.md), not part of this suite."""
+
+    def _write_config(self, tmp_path: Path) -> Path:
+        path = tmp_path / "sources.yaml"
+        path.write_text(
+            "version: 1\n"
+            "sources:\n"
+            "  - id: good\n"
+            "    name: Good Source\n"
+            "    adapter: rss\n"
+            "    url: https://good.invalid/feed.xml\n"
+            "    trust_tier: OFFICIAL\n"
+            "    editorial_role: A source that resolves and parses.\n"
+            "    priority: PRIMARY_NORMAL\n"
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
+            "  - id: broken\n"
+            "    name: Broken Source\n"
+            "    adapter: rss\n"
+            "    url: https://broken.invalid/feed.xml\n"
+            "    trust_tier: OFFICIAL\n"
+            "    editorial_role: A source whose endpoint returns an error.\n"
+            "    priority: PRIMARY_NORMAL\n"
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
+            "  - id: disabled_source\n"
+            "    name: Disabled Source\n"
+            "    enabled: false\n"
+            "    adapter: rss\n"
+            "    url: https://off.invalid/feed.xml\n"
+            "    trust_tier: OFFICIAL\n"
+            "    editorial_role: A disabled source, never probed by default.\n"
+            "    priority: PRIMARY_NORMAL\n"
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n"
+            "    disabled_reason: Disabled for this test.\n",
+            encoding="utf-8",
+        )
+        return path
+
+    @pytest.fixture
+    def wired(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):  # type: ignore[no-untyped-def]
+        self._write_config(tmp_path)
+        monkeypatch.setenv("AI_NEWS_SOURCES_CONFIG_PATH", str(tmp_path / "sources.yaml"))
+        get_settings.cache_clear()
+
+        calls: list[str] = []
+
+        def fake_client(**kwargs: object) -> HttpClient:
+            def handler(request: httpx.Request) -> httpx.Response:
+                calls.append(request.url.host)
+                if request.url.host == "broken.invalid":
+                    return httpx.Response(403, content=b"forbidden")
+                return httpx.Response(
+                    200,
+                    content=feed_bytes("rss_full.xml"),
+                    headers={"content-type": "application/rss+xml"},
+                )
+
+            return HttpClient(retry_backoff_seconds=0.0, transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr("ai_news_editor.cli.sources.HttpClient", fake_client)
+        return calls
+
+    def test_a_healthy_registry_exits_zero(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch  # type: ignore[no-untyped-def]
+    ) -> None:
+        path = tmp_path / "sources.yaml"
+        path.write_text(
+            "version: 1\n"
+            "sources:\n"
+            "  - id: good\n"
+            "    name: Good Source\n"
+            "    adapter: rss\n"
+            "    url: https://good.invalid/feed.xml\n"
+            "    trust_tier: OFFICIAL\n"
+            "    editorial_role: A source that resolves and parses.\n"
+            "    priority: PRIMARY_NORMAL\n"
+            "    content_types: [NEWS]\n"
+            "    publisher_region: UNITED_STATES\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("AI_NEWS_SOURCES_CONFIG_PATH", str(path))
+        get_settings.cache_clear()
+
+        def fake_client(**kwargs: object) -> HttpClient:
+            def handler(request: httpx.Request) -> httpx.Response:
+                return httpx.Response(
+                    200,
+                    content=feed_bytes("rss_full.xml"),
+                    headers={"content-type": "application/rss+xml"},
+                )
+
+            return HttpClient(retry_backoff_seconds=0.0, transport=httpx.MockTransport(handler))
+
+        monkeypatch.setattr("ai_news_editor.cli.sources.HttpClient", fake_client)
+
+        result = runner.invoke(app, ["sources", "doctor"])
+        assert result.exit_code == 0, output_of(result)
+
+    def test_reports_discovery_and_parse_for_every_enabled_source(self, wired) -> None:  # type: ignore[no-untyped-def]
+        result = runner.invoke(app, ["sources", "doctor"])
+        output = output_of(result)
+        assert "Good Source" in output
+        assert "Broken Source" in output
+        assert "OK" in output
+        assert "FAIL" in output
+
+    def test_a_failing_enabled_source_exits_nonzero(self, wired) -> None:  # type: ignore[no-untyped-def]
+        result = runner.invoke(app, ["sources", "doctor"])
+        assert result.exit_code == 1
+
+    def test_disabled_sources_are_not_probed_by_default(self, wired) -> None:  # type: ignore[no-untyped-def]
+        calls = wired
+        runner.invoke(app, ["sources", "doctor"])
+        assert "off.invalid" not in calls
+
+    def test_include_disabled_probes_them_too(self, wired) -> None:  # type: ignore[no-untyped-def]
+        calls = wired
+        result = runner.invoke(app, ["sources", "doctor", "--include-disabled"])
+        assert "off.invalid" in calls
+        assert "Disabled Source" in output_of(result)
+
+    def test_nothing_is_written_to_the_database(
+        self, wired, tmp_path: Path  # type: ignore[no-untyped-def]
+    ) -> None:
+        """No `db init` was ever run — if doctor tried to touch a database, this would
+        fail with a missing-database error instead of a clean diagnostic report."""
+        result = runner.invoke(app, ["sources", "doctor"])
+        assert "Good Source" in output_of(result)
+        assert not (tmp_path / "ai_news.sqlite3").exists()
 
 
 class TestProcessAndStatusCommands:

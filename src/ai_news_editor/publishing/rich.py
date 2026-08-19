@@ -255,6 +255,11 @@ def run_step(
             target, check_asset(step.assets[0], media_root), caption=step.text,
             parse_mode=step.parse_mode,
         )
+    elif step.method == "sendVideo":
+        sent = client.send_video(
+            target, check_asset(step.assets[0], media_root), caption=step.text,
+            parse_mode=step.parse_mode,
+        )
     elif step.method == "sendDocument":
         sent = client.send_document(target, check_asset(step.assets[0], media_root))
     elif step.method == "sendMediaGroup":
@@ -262,7 +267,7 @@ def run_step(
             target, [check_asset(a, media_root) for a in step.assets]
         )
         sent = messages[0]
-    else:  # pragma: no cover - the plan only emits the four above
+    else:  # pragma: no cover - the plan only emits the five above
         raise TelegramError(f"unsupported step method {step.method!r}")
 
     return ComponentOutcome(

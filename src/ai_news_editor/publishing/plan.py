@@ -35,6 +35,7 @@ from pathlib import Path
 
 from ai_news_editor.domain.enums import MediaOrigin
 from ai_news_editor.domain.models import DraftVersion, MediaAsset
+from ai_news_editor.media.limits import MAX_TELEGRAM_VIDEO_BYTES
 from ai_news_editor.publishing.message import build_message
 
 #: Bot API caption limit, in UTF-16 code units. The exact figure could not be re-read
@@ -52,10 +53,15 @@ MEDIA_GROUP_MAX = 10
 #: strange to a channel.
 ALLOWED_IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp"})
 ALLOWED_DOCUMENT_SUFFIXES = frozenset({".pdf"})
+#: Step 4 (AI News Agent v2): media.video.process_video only ever writes .mp4.
+ALLOWED_VIDEO_SUFFIXES = frozenset({".mp4"})
 
 #: Bots may upload photos up to 10 MB and other files up to 50 MB through the cloud API.
 MAX_PHOTO_BYTES = 10 * 1024 * 1024
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
+#: Step 4: same 50 MB non-photo upload limit as MAX_DOCUMENT_BYTES, imported from
+#: media.limits (verified against the Bot API docs there) rather than a second literal.
+MAX_VIDEO_BYTES = MAX_TELEGRAM_VIDEO_BYTES
 
 
 class Component(StrEnum):
@@ -152,14 +158,25 @@ def check_asset(asset: MediaAsset, media_root: Path) -> Path:
 
     suffix = candidate.suffix.lower()
     is_document = asset.role.value == "PDF"
-    allowed = ALLOWED_DOCUMENT_SUFFIXES if is_document else ALLOWED_IMAGE_SUFFIXES
+    is_video = asset.role.value == "VIDEO"
+    if is_document:
+        allowed = ALLOWED_DOCUMENT_SUFFIXES
+    elif is_video:
+        allowed = ALLOWED_VIDEO_SUFFIXES
+    else:
+        allowed = ALLOWED_IMAGE_SUFFIXES
     if suffix not in allowed:
         raise PlanError(
             f"{asset.reference!r} is a {suffix or 'file with no extension'}; expected one "
             f"of {', '.join(sorted(allowed))}"
         )
 
-    limit = MAX_DOCUMENT_BYTES if is_document else MAX_PHOTO_BYTES
+    if is_document:
+        limit = MAX_DOCUMENT_BYTES
+    elif is_video:
+        limit = MAX_VIDEO_BYTES
+    else:
+        limit = MAX_PHOTO_BYTES
     size = candidate.stat().st_size
     if size > limit:
         raise PlanError(
@@ -187,12 +204,26 @@ def build_plan(
     message = build_message(version)
     text = message.payload_text
     parse_mode = message.parse_mode
-    images = tuple(a for a in publishable_media(version) if a.role.value != "PDF")
-    documents = tuple(a for a in publishable_media(version) if a.role.value == "PDF")
+    media = publishable_media(version)
+    images = tuple(a for a in media if a.role.value not in ("PDF", "VIDEO"))
+    documents = tuple(a for a in media if a.role.value == "PDF")
+    videos = tuple(a for a in media if a.role.value == "VIDEO")
+
+    if videos and images:
+        # Step 4 (AI News Agent v2): a version is not expected to carry both — video
+        # and a photo/album are two different Telegram methods with two different
+        # caption/grouping rules, and mixing them has no clear "what does this post
+        # look like" answer. Raised here rather than silently picking one.
+        raise PlanError(
+            "a draft version may carry a video or images, not both — got "
+            f"{len(videos)} video(s) and {len(images)} image(s)"
+        )
+    if len(videos) > 1:
+        raise PlanError(f"a post may carry at most one video, got {len(videos)}")
 
     # Every file is checked now. Finding a missing image after the text has gone out
     # would leave a post on the channel that a human never approved in that form.
-    for asset in (*images, *documents):
+    for asset in (*images, *documents, *videos):
         check_asset(asset, media_root)
 
     steps: list[Step] = []
@@ -201,7 +232,41 @@ def build_plan(
 
     fits_caption = len(text) <= MAX_CAPTION_CHARS
 
-    if images and len(images) == 1 and fits_caption:
+    if videos and fits_caption:
+        steps.append(
+            Step(
+                component=Component.MAIN,
+                method="sendVideo",
+                summary=f"video {videos[0].reference} with the full post as caption",
+                text=text,
+                parse_mode=parse_mode,
+                assets=videos,
+            )
+        )
+    elif videos:
+        steps.append(
+            Step(
+                component=Component.MEDIA,
+                method="sendVideo",
+                summary=f"video {videos[0].reference}, no caption",
+                assets=videos,
+            )
+        )
+        warnings.append(
+            f"the post is {len(text)} characters, over the {MAX_CAPTION_CHARS}-character "
+            "caption limit, so the video is sent first and the full text follows. "
+            "Nothing is truncated."
+        )
+        steps.append(
+            Step(
+                component=Component.MAIN,
+                method="sendMessage",
+                summary="the approved post, in full",
+                text=text,
+                parse_mode=parse_mode,
+            )
+        )
+    elif images and len(images) == 1 and fits_caption:
         steps.append(
             Step(
                 component=Component.MAIN,

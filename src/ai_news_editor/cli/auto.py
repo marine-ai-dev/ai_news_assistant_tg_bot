@@ -200,6 +200,138 @@ def auto_run() -> None:
         raise typer.Exit(code=1)
 
 
+@auto_app.command("soak-v2")
+def auto_soak_v2(
+    count: Annotated[
+        int, typer.Option("--count", "-n", help="How many posts to send.")
+    ] = 8,
+    prefer_category: Annotated[
+        str | None,
+        typer.Option(
+            "--prefer-category",
+            help="Developer override for TEST soak coverage: narrow candidates to "
+            "sources capable of this EditorialCategory. Never forces an invalid "
+            "classification — the real pipeline still decides the actual category.",
+        ),
+    ] = None,
+    test: Annotated[
+        bool,
+        typer.Option(
+            "--test",
+            help="Required. This command only ever targets AI_NEWS_TEST_CHANNEL — "
+            "there is no live mode for it.",
+        ),
+    ] = False,
+) -> None:
+    """Step 6: send real v2-pipeline posts to the TEST Telegram channel only.
+
+    Runs the real, currently-collected candidate pool through the actual v2
+    pipeline (source capability, diversity, primary-source preference, Gemini
+    classification/generation, media, category rendering, publication planning) —
+    the same isolated in-memory database copy ``auto once --test`` already uses, so
+    nothing here ever touches the canonical on-disk database, the live daily-limit
+    state, or the production channel. Sequential, with a pause between posts —
+    never a flood, never a persistent schedule.
+    """
+    if not test:
+        err_console.print(
+            "[bold red]--test is required.[/bold red] This command never targets "
+            "production — there is no live mode for a soak run."
+        )
+        raise typer.Exit(code=2)
+
+    from ai_news_editor.automation import test_history
+    from ai_news_editor.automation.gemini import GeminiClient
+    from ai_news_editor.automation.pipeline import isolated_connection
+    from ai_news_editor.automation.soak import run_soak
+    from ai_news_editor.cli.main import open_migrated_database
+    from ai_news_editor.domain.enums import EditorialCategory
+    from ai_news_editor.planning.recent_history import recent_history
+    from ai_news_editor.publishing.telegram import TelegramClient
+    from ai_news_editor.sources.config import load_sources_config
+    from ai_news_editor.sources.http import HttpClient
+    from ai_news_editor.storage.repositories import (
+        ArticleRepository,
+        DraftRepository,
+        EvaluationRepository,
+        PublicationRepository,
+    )
+
+    settings = _settings()
+    if not settings.test_channel:
+        err_console.print(
+            "[bold red]AI_NEWS_TEST_CHANNEL is not configured.[/bold red] Set it before "
+            "running a soak — this command refuses to guess a destination."
+        )
+        raise typer.Exit(code=2)
+
+    category: EditorialCategory | None = None
+    if prefer_category is not None:
+        try:
+            category = EditorialCategory(prefer_category.upper())
+        except ValueError as exc:
+            err_console.print(f"[bold red]Unknown category:[/bold red] {prefer_category}")
+            raise typer.Exit(code=2) from exc
+
+    canonical = open_migrated_database()
+    try:
+        with isolated_connection(canonical, mode="test") as connection:
+            registry = load_sources_config(settings.sources_config_path)
+            recent_seed = recent_history(
+                publications=PublicationRepository(connection),
+                drafts=DraftRepository(connection),
+                articles=ArticleRepository(connection),
+                evaluations=EvaluationRepository(connection),
+                sources=registry,
+            )
+            client = GeminiClient(
+                settings.gemini_api_key.get_secret_value(), model=settings.llm_model
+            )
+            with (
+                HttpClient() as http,
+                TelegramClient(settings.telegram_bot_token.get_secret_value()) as telegram,
+            ):
+                results = run_soak(
+                    connection,
+                    client=client,
+                    registry=registry,
+                    http=http,
+                    telegram=telegram,
+                    target_channel=settings.test_channel,
+                    count=count,
+                    prefer_category=category,
+                    test_history_path=settings.data_dir / test_history.DEFAULT_FILENAME,
+                    recent_seed=recent_seed,
+                )
+    finally:
+        canonical.close()
+
+    if not results:
+        console.print("[yellow]No real candidate produced a publishable post.[/yellow]")
+        raise typer.Exit(code=0)
+
+    table = Table(title=f"Soak — {len(results)} post(s) sent to {settings.test_channel}")
+    table.add_column("#")
+    table.add_column("Category")
+    table.add_column("Source")
+    table.add_column("Plan")
+    table.add_column("Gemini calls", justify="right")
+    table.add_column("Message ID(s)")
+    for result in results:
+        message_ids = ", ".join(
+            str(c.message_id) for c in result.component_outcomes if c.message_id is not None
+        )
+        table.add_row(
+            str(result.index),
+            result.outcome.content.category.value,
+            result.source_id,
+            result.variant.value,
+            str(result.outcome.gemini_calls),
+            message_ids,
+        )
+    console.print(table)
+
+
 @auto_app.command("stats")
 def auto_stats() -> None:
     """How much gemini:auto activity is on record. Read-only."""

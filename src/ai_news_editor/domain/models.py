@@ -32,7 +32,9 @@ from ai_news_editor.domain.enums import (
     ContentType,
     DraftStatus,
     DuplicateReason,
+    EditorialCategory,
     EditorialDecision,
+    EditorialEvidence,
     EvaluatorType,
     EvidenceKind,
     EvidenceStatus,
@@ -212,6 +214,12 @@ class Evaluation(ImmutableDomainModel):
     why_selected: tuple[str, ...] = ()
     editorial_angle: str | None = None
     notes: str | None = None
+    #: Step 3 (AI News Agent v2). Nullable — an evaluation made before this existed
+    #: carries no classification rather than a guessed one. See migration 014 and
+    #: EditorialCategory's own docstring for why this is a fourth taxonomy, not a
+    #: rename of `category`.
+    editorial_category: EditorialCategory | None = None
+    evidence_type: EditorialEvidence | None = None
     created_at: UtcDatetime = Field(default_factory=now_utc)
 
     def is_current_for(self, article: Article, excerpt: str | None) -> bool:

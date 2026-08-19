@@ -36,6 +36,210 @@ class TrustTier(StrEnum):
     UNVERIFIED = "UNVERIFIED"
 
 
+class ContentCapability(StrEnum):
+    """What a source's items may eventually feed into, editorially.
+
+    Source registry metadata for a future content classifier — a source listing
+    ``PROMPT_WORKFLOW`` does not mean anything extracts prompts from it today. The
+    live automation pipeline is NEWS-only and reads none of this; it exists so a later
+    phase does not have to re-derive "what is this source good for" from scratch.
+    """
+
+    NEWS = "NEWS"
+    AI_TOOL = "AI_TOOL"
+    FREE_DEAL = "FREE_DEAL"
+    AI_LIFEHACK = "AI_LIFEHACK"
+    PROMPT_WORKFLOW = "PROMPT_WORKFLOW"
+    EXPLAINER = "EXPLAINER"
+    RESEARCH = "RESEARCH"
+    WEEKLY_DIGEST_INPUT = "WEEKLY_DIGEST_INPUT"
+
+
+class MediaPolicy(StrEnum):
+    """How conservatively a source's media may be used, once media handling exists.
+
+    Never inferred from "it's on an official page" — reuse permission has to be
+    explicit and traceable, not assumed. Registry metadata only: nothing downloads,
+    compresses or reuploads media yet.
+    """
+
+    #: Default. No image/video from this source is used in any form.
+    NO_MEDIA = "NO_MEDIA"
+    #: Telegram's own link-preview card may show the source's page image. Nothing is
+    #: downloaded or re-hosted by this application.
+    LINK_PREVIEW_ONLY = "LINK_PREVIEW_ONLY"
+    #: A future phase may look for media on this source's pages, but reuse permission
+    #: is still unresolved — discovery only, not a green light to republish.
+    DISCOVER_MEDIA = "DISCOVER_MEDIA"
+    #: The source has stated, checkable licensing/reuse terms this application can
+    #: point to. Not the default for any source added in this step.
+    EXPLICIT_REUSE_ALLOWED = "EXPLICIT_REUSE_ALLOWED"
+
+
+class PublisherRegion(StrEnum):
+    """Step 6B: where a source's publisher is actually headquartered/edited — never
+    inferred from a feed's TLD, hosting location, or language. This is reviewed, human
+    metadata: every :class:`~sources.config.SourceDefinition` must set one explicitly.
+
+    The channel's eligible-source allowlist (``geography.ALLOWED_REGIONS``) is exactly
+    ``{UKRAINE, EUROPE, UNITED_KINGDOM, UNITED_STATES}`` — UNITED_KINGDOM is kept as its
+    own member (not folded into EUROPE) because that is how a reviewer verifies it, but
+    the allowlist itself treats it the same as EUROPE, matching the spec's "United
+    Kingdom counts as Europe" instruction. ``RUSSIA``, ``BELARUS`` and ``IRAN`` are
+    named explicitly (not left to fall through "OTHER") so a reviewer sees the actual
+    forbidden country in config and in a rejection message, not a vague catch-all.
+    ``OTHER`` is any real, known origin outside the allowlist (e.g. Canada, Japan) —
+    still ineligible, just not one of the three explicitly named forbidden ones.
+    ``UNKNOWN`` is for a source whose origin has not yet been reviewed — ineligible
+    until it is, which is what makes the allowlist fail closed rather than open.
+    """
+
+    UKRAINE = "UKRAINE"
+    EUROPE = "EUROPE"
+    UNITED_KINGDOM = "UNITED_KINGDOM"
+    UNITED_STATES = "UNITED_STATES"
+    RUSSIA = "RUSSIA"
+    BELARUS = "BELARUS"
+    IRAN = "IRAN"
+    OTHER = "OTHER"
+    UNKNOWN = "UNKNOWN"
+
+
+class SourcePriority(StrEnum):
+    """Coarse ranking metadata for a future editorial diversity/ranking pass.
+
+    Deliberately coarse — not a numeric score. ``TrustTier`` says how much a claim can
+    be trusted; this says how much weight a source should carry when choosing among
+    several eligible stories, which is a different question the current automation
+    pipeline does not yet ask.
+    """
+
+    PRIMARY_HIGH = "PRIMARY_HIGH"
+    PRIMARY_NORMAL = "PRIMARY_NORMAL"
+    DISCOVERY = "DISCOVERY"
+    COMMUNITY = "COMMUNITY"
+
+
+class FulltextPolicy(StrEnum):
+    """Whether a source's items are expected to need or support a fulltext fetch.
+
+    ``DISCOVERY_ONLY`` sources (community signal sources today) never reach
+    ``sources.fulltext.fetch_fulltext`` at all — process.py routes their items to a
+    ``CommunitySignal`` instead of normalizing them into articles. This field records
+    that fact as registry metadata rather than leaving it implicit in ``signal_only``.
+    """
+
+    NORMAL_ATTEMPT = "NORMAL_ATTEMPT"
+    DISCOVERY_ONLY = "DISCOVERY_ONLY"
+
+
+class EditorialCategory(StrEnum):
+    """What kind of post this is, editorially — Step 3 (AI News Agent v2).
+
+    Deliberately a fourth taxonomy, not a rename of an existing one:
+
+    * ``ContentType`` (Phase 1) is a *format* split — NEWS (article-sourced) vs.
+      PROMPT/EXPLAINER/TESTED_USE_CASE/RESOURCE (editorial-original, from a
+      ``ContentItem``). Every value below is still article-sourced, i.e. still
+      ``ContentType.NEWS`` at that level — this is a finer split *within* it.
+    * ``Category`` (Phase 4, ``evaluations.category`` / ``draft_versions.category``) is
+      editorial *tone* (WOW, TRENDING, USEFUL_TOOL, ...), shown to readers and driving
+      the Telegram headline emoji. Orthogonal to this: a NEWS post can be any tone.
+    * ``ContentCapability`` (Step 2) is *source* metadata — what a source's items may
+      eventually feed into. This is what a specific post actually *is*, decided at
+      selection time, constrained by its source's ``ContentCapability`` list.
+
+    Every value here is still resolved through ``evaluations.editorial_category``,
+    which is deliberately unconstrained TEXT at the database level (see migration 014)
+    — this enum is where the real constraint lives, exactly like ``Category`` already
+    works.
+    """
+
+    NEWS = "NEWS"
+    AI_TOOL = "AI_TOOL"
+    FREE_DEAL = "FREE_DEAL"
+    AI_LIFEHACK = "AI_LIFEHACK"
+    PROMPT_WORKFLOW = "PROMPT_WORKFLOW"
+    EXPLAINER = "EXPLAINER"
+    RESEARCH = "RESEARCH"
+    #: Supported end to end (schema, validation, rendering) but never scheduled
+    #: automatically — see automation/pipeline.py and docs/editorial.md. A future step
+    #: decides publishing cadence; this step only makes the type real.
+    WEEKLY_DIGEST = "WEEKLY_DIGEST"
+
+
+class EditorialEvidence(StrEnum):
+    """What kind of evidence backs a post's claims — Step 3.
+
+    A different axis from the existing :class:`EvidenceKind` (Phase 8.1, "what act
+    produced a PROMPT's evidence" — OFFICIAL_TEST/THIRD_PARTY_DEMO/...): this classifies
+    the *source* behind an automated candidate's claims, not how a human-authored
+    prompt was tested. Named distinctly on purpose so the two are never confused.
+
+    The distinction ``AI_LIFEHACK`` exists to enforce: a Tier C community source can
+    supply ``USER_REPORTED`` or ``COMMUNITY_DISCUSSION`` evidence, never
+    ``PRIMARY_SOURCE`` — see ``sources.capability.allowed_evidence``. A post's evidence
+    type is what a validator checks before letting an anecdote read like a verified fact.
+    """
+
+    #: The vendor's own official statement — an OFFICIAL-tier source's own words.
+    PRIMARY_SOURCE = "PRIMARY_SOURCE"
+    #: Independent journalism reporting on something, not the thing itself.
+    REPUTABLE_SECONDARY = "REPUTABLE_SECONDARY"
+    #: One person's account of what happened to them. Never generalized into "AI does
+    #: X" — only "this person reports AI did X for them".
+    USER_REPORTED = "USER_REPORTED"
+    #: Community attention/reaction with no single identifiable claimant — a thread's
+    #: general reaction, not one person's story.
+    COMMUNITY_DISCUSSION = "COMMUNITY_DISCUSSION"
+    #: A named paper or research report, distinct from a company's own marketing
+    #: framing of that same result — see docs/editorial.md's RESEARCH claim framing.
+    RESEARCH_PAPER = "RESEARCH_PAPER"
+    #: An official pricing/product page — the source ``FREE_DEAL`` claims must resolve
+    #: to, not a secondary summary of one.
+    OFFICIAL_PRODUCT_PAGE = "OFFICIAL_PRODUCT_PAGE"
+
+
+class PromptOrigin(StrEnum):
+    """How a PROMPT_WORKFLOW post's prompt text relates to what the source actually
+    published — Step 3. Never inferred; a generator must state which one applies."""
+
+    #: The source published this exact prompt text. May be shown as a quote.
+    SOURCE_VERBATIM = "SOURCE_VERBATIM"
+    #: The source's prompt was reworded/clarified for readability. Must not be
+    #: presented as a direct quote.
+    SOURCE_ADAPTED = "SOURCE_ADAPTED"
+    #: The source describes a workflow or use case but no literal prompt text — what's
+    #: shown is derived from that description, not lifted from it.
+    WORKFLOW_DERIVED = "WORKFLOW_DERIVED"
+
+
+class FreeDealKind(StrEnum):
+    """What kind of "free" a FREE_DEAL post is actually reporting — Step 5.
+
+    ``editorial.safety.validate_free_deal`` already requires explicit evidence before
+    a post may be classified FREE_DEAL at all; this enum is the next layer, read by
+    the renderer, so a post never collapses six different offers into one vague word.
+    A free *trial* rendered as if it were free forever is exactly the kind of
+    factual drift this taxonomy exists to prevent.
+    """
+
+    #: No cost, no stated time limit or trial framing.
+    FREE = "FREE"
+    #: A tier of an otherwise-paid product that stays free indefinitely, alongside
+    #: paid tiers with more capability.
+    FREE_TIER = "FREE_TIER"
+    #: Free for a stated period or usage amount, then billing starts.
+    FREE_TRIAL = "FREE_TRIAL"
+    #: Source code (or model weights) released under an open license — says nothing
+    #: about whether a *hosted* version of the same thing is free to use.
+    OPEN_SOURCE = "OPEN_SOURCE"
+    #: A limited-time price cut or bundled offer, not an ongoing free option.
+    PROMOTION = "PROMOTION"
+    #: A reduced but still non-zero price.
+    DISCOUNT = "DISCOUNT"
+
+
 class FetchOutcome(StrEnum):
     """Result of one attempt to read a source.
 
@@ -413,6 +617,9 @@ class MediaRole(StrEnum):
     SOURCE_SCREENSHOT = "SOURCE_SCREENSHOT"
     INFOGRAPHIC = "INFOGRAPHIC"
     PDF = "PDF"
+    #: Step 4 (AI News Agent v2). A processed, Telegram-safe MP4 — never a source's own
+    #: unprocessed video (see MediaOrigin.SOURCE_MEDIA and publishable_media()).
+    VIDEO = "VIDEO"
     OTHER = "OTHER"
 
 

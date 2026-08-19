@@ -251,6 +251,28 @@ class TelegramClient:
             data["parse_mode"] = parse_mode
         return self._send_upload("sendPhoto", data, {"photo": path})
 
+    def send_video(
+        self,
+        chat_id: str,
+        path: Path,
+        *,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+    ) -> SentMessage:
+        """Upload one video, optionally carrying the post as its caption.
+
+        Step 4 (AI News Agent v2): mirrors ``send_photo`` exactly — same multipart
+        upload path, same caption/parse_mode handling, same retry discipline. The file
+        itself always arrives already processed and size-checked (``media.video`` /
+        ``publishing.plan``'s video handling); this method never resizes or transcodes.
+        """
+        data: dict[str, Any] = {"chat_id": chat_id}
+        if caption is not None:
+            data["caption"] = caption
+        if parse_mode is not None:
+            data["parse_mode"] = parse_mode
+        return self._send_upload("sendVideo", data, {"video": path})
+
     def send_document(
         self, chat_id: str, path: Path, *, caption: str | None = None
     ) -> SentMessage:

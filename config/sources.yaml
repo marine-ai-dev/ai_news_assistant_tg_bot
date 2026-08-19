@@ -1,16 +1,25 @@
-# Source configuration for the AI News Editor Agent.
+# Source configuration for the AI News Editor Agent — registry v2 (Step 2).
 #
 # This file is committed. It must never contain secrets.
 #
-# Every endpoint below was fetched and verified on 2026-08-10: each returns a parseable
-# RSS 2.0 document over HTTPS with no authentication.
+# See docs/sources.md for the tier philosophy, the v2 metadata fields explained below,
+# and the full disabled-source rationale. Every `enabled: true` endpoint below was
+# fetched and verified over HTTPS (no authentication) on 2026-08-18, with the same
+# User-Agent this project's HttpClient sends — see AGENTS.md / sources.md for how to
+# re-verify with `ai-news sources doctor`.
 #
-# `adapter` selects the implementation. Only `rss` exists today; `html_changelog`,
-# `hn_signal` and API-backed kinds arrive in later phases and will use `options` for
-# their own settings rather than being bent into an RSS shape.
+# `adapter` selects the implementation. `rss` covers both RSS 2.0 and Atom feeds.
 #
-# `trust_tier` is provenance metadata, not a truth signal. It records where a claim
-# came from; the editorial layer decides what that is worth.
+# `trust_tier` is provenance metadata, not a truth signal: OFFICIAL (Tier A — primary/
+# official), REPUTABLE_SECONDARY (Tier B — discovery/journalism), COMMUNITY_SIGNAL
+# (Tier C — community attention only, never evidence). The current NEWS-only automation
+# pipeline reads only this field (automation/pipeline.py filters to OFFICIAL) — nothing
+# below changes that.
+#
+# v2 registry metadata (priority, content_types, media_policy, fulltext_policy,
+# source_family, domains, disabled_reason) is read by no live code path yet. It exists
+# for a later phase's editorial classifier, diversity pass and media handling, and is
+# validated here so it is trustworthy whenever that phase arrives.
 
 version: 1
 
@@ -23,6 +32,10 @@ defaults:
   poll_interval_minutes: 60
 
 sources:
+  # ============================================================================
+  # TIER A — PRIMARY / OFFICIAL (trust_tier: OFFICIAL)
+  # ============================================================================
+
   - id: openai_news
     name: OpenAI News
     enabled: true
@@ -30,6 +43,10 @@ sources:
     url: https://openai.com/news/rss.xml
     trust_tier: OFFICIAL
     publisher: OpenAI
+    publisher_region: UNITED_STATES
+    source_family: OpenAI
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, AI_TOOL]
     editorial_role: >-
       Product announcements and ChatGPT features straight from the vendor. The primary
       source for "something you can use today" stories.
@@ -42,10 +59,46 @@ sources:
     url: https://blog.google/technology/ai/rss/
     trust_tier: OFFICIAL
     publisher: Google
+    publisher_region: UNITED_STATES
+    source_family: Google
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, AI_TOOL]
     editorial_role: >-
       Gemini features and consumer-facing Google AI products, written for a general
       audience rather than for engineers.
     tags: [product_update, gemini, official]
+
+  - id: google_deepmind
+    name: Google DeepMind Blog
+    enabled: true
+    adapter: rss
+    url: https://deepmind.google/blog/rss.xml
+    trust_tier: OFFICIAL
+    publisher: Google DeepMind
+    publisher_region: UNITED_KINGDOM
+    source_family: Google
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, RESEARCH]
+    editorial_role: >-
+      Model and research announcements (Gemini model family, AlphaFold-class work)
+      straight from DeepMind, distinct in voice and depth from the consumer Keyword blog.
+    tags: [research, gemini, official]
+
+  - id: google_research
+    name: Google Research Blog
+    enabled: true
+    adapter: rss
+    url: https://research.google/blog/rss/
+    trust_tier: OFFICIAL
+    publisher: Google Research
+    publisher_region: UNITED_STATES
+    source_family: Google
+    priority: PRIMARY_NORMAL
+    content_types: [RESEARCH]
+    editorial_role: >-
+      Deeper research posts than the product blogs carry — useful background and
+      explainer material, not usually a standalone "news" post on its own.
+    tags: [research, official]
 
   - id: huggingface_blog
     name: Hugging Face Blog
@@ -54,9 +107,14 @@ sources:
     url: https://huggingface.co/blog/feed.xml
     trust_tier: OFFICIAL
     publisher: Hugging Face
+    publisher_region: UNITED_STATES
+    source_family: Hugging Face
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, AI_TOOL, RESEARCH]
     editorial_role: >-
-      Notable open-source AI developments and tools. Skews technical; Phase 4 is
-      expected to filter this source hard and keep only stories with a consumer angle.
+      Notable open-source AI developments and tools. Skews technical; the editorial
+      layer is expected to filter this source hard and keep only stories with a
+      consumer angle.
     tags: [open_source, tools, technical]
 
   - id: microsoft_365_blog
@@ -66,23 +124,127 @@ sources:
     url: https://www.microsoft.com/en-us/microsoft-365/blog/feed/
     trust_tier: OFFICIAL
     publisher: Microsoft
+    publisher_region: UNITED_STATES
+    source_family: Microsoft
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
     editorial_role: >-
       User-facing Microsoft 365 Copilot features — AI at work, in tools people already
       have. Publishes infrequently, so expect few items per run.
     tags: [product_update, copilot, ai_for_work, official]
 
-  - id: techcrunch_ai
-    name: TechCrunch — AI
+  - id: microsoft_ai_news
+    name: Microsoft AI News
     enabled: true
     adapter: rss
-    url: https://techcrunch.com/category/artificial-intelligence/feed/
-    trust_tier: REPUTABLE_SECONDARY
-    publisher: TechCrunch
+    url: https://news.microsoft.com/source/topics/ai/feed/
+    trust_tier: OFFICIAL
+    publisher: Microsoft
+    publisher_region: UNITED_STATES
+    source_family: Microsoft
+    priority: PRIMARY_HIGH
+    content_types: [NEWS]
     editorial_role: >-
-      Broader AI industry news plus the stories vendors never publish about themselves:
-      controversies, failures, deepfakes, scams and viral oddities. The main supply of
-      non-announcement material.
-    tags: [industry, consumer, controversy, viral]
+      Microsoft's own newsroom, filtered to the AI topic — company-level AI
+      announcements (Copilot, Azure AI) that don't fit the 365-specific blog.
+    tags: [product_update, copilot, official]
+
+  - id: microsoft_research
+    name: Microsoft Research Blog
+    enabled: true
+    adapter: rss
+    url: https://www.microsoft.com/en-us/research/feed/
+    trust_tier: OFFICIAL
+    publisher: Microsoft Research
+    publisher_region: UNITED_STATES
+    source_family: Microsoft
+    priority: PRIMARY_NORMAL
+    content_types: [RESEARCH]
+    editorial_role: >-
+      Research-depth material — background and explainer source, not usually a
+      standalone news post by itself.
+    tags: [research, official]
+
+  - id: github_changelog
+    name: GitHub Changelog
+    enabled: true
+    adapter: rss
+    url: https://github.blog/changelog/feed/
+    trust_tier: OFFICIAL
+    publisher: GitHub
+    publisher_region: UNITED_STATES
+    source_family: GitHub
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Concrete, shipped changes to GitHub Copilot and other AI-assisted developer
+      tooling — kept as its own family from Microsoft, since readers experience GitHub
+      as its own product, not "another Microsoft story."
+    tags: [product_update, copilot, developer_tools, official]
+
+  - id: nvidia_blog
+    name: NVIDIA Blog
+    enabled: true
+    adapter: rss
+    url: https://blogs.nvidia.com/feed/
+    trust_tier: OFFICIAL
+    publisher: NVIDIA
+    publisher_region: UNITED_STATES
+    source_family: NVIDIA
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, RESEARCH]
+    editorial_role: >-
+      Hardware and platform-level AI news (GPUs, generative-AI platform launches) from
+      the vendor whose chips much of the rest of this industry runs on.
+    tags: [hardware, product_update, official]
+
+  - id: aws_machine_learning
+    name: AWS Machine Learning Blog
+    enabled: true
+    adapter: rss
+    url: https://aws.amazon.com/blogs/machine-learning/feed/
+    trust_tier: OFFICIAL
+    publisher: Amazon Web Services
+    publisher_region: UNITED_STATES
+    source_family: Amazon
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL, RESEARCH]
+    editorial_role: >-
+      Bedrock and AWS AI service announcements — the cloud-infrastructure angle on AI
+      news, complementary to the consumer-product vendors above.
+    tags: [product_update, cloud, official]
+
+  - id: apple_ml_research
+    name: Apple Machine Learning Research
+    enabled: true
+    adapter: rss
+    url: https://machinelearning.apple.com/rss.xml
+    trust_tier: OFFICIAL
+    publisher: Apple
+    publisher_region: UNITED_STATES
+    source_family: Apple
+    priority: PRIMARY_NORMAL
+    content_types: [RESEARCH]
+    editorial_role: >-
+      Apple publishes almost no consumer AI-feature announcements as press releases;
+      this research blog is the one reliable machine-readable official channel it has.
+    tags: [research, official]
+
+  - id: mistral_ai_news
+    name: Mistral AI News
+    enabled: true
+    adapter: rss
+    url: https://mistral.ai/news/rss
+    trust_tier: OFFICIAL
+    publisher: Mistral AI
+    publisher_region: EUROPE
+    source_family: Mistral AI
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      The leading European frontier-model lab's own announcements — model releases,
+      infrastructure, product launches.
+    tags: [product_update, official]
 
   # --- HTML changelog sources -------------------------------------------------
   # These vendors publish no usable feed, so their listing pages are read directly
@@ -98,6 +260,10 @@ sources:
     url: https://www.anthropic.com/news
     trust_tier: OFFICIAL
     publisher: Anthropic
+    publisher_region: UNITED_STATES
+    source_family: Anthropic
+    priority: PRIMARY_HIGH
+    content_types: [NEWS, AI_TOOL]
     editorial_role: >-
       Claude product announcements and company news. Anthropic publishes no public
       news feed, so the newsroom listing page is read directly.
@@ -121,6 +287,10 @@ sources:
     url: https://www.notion.com/releases
     trust_tier: OFFICIAL
     publisher: Notion
+    publisher_region: UNITED_STATES
+    source_family: Notion
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
     editorial_role: >-
       Notion AI and product release notes — small, concrete changes in a tool many
       non-technical people use daily. No feed is published.
@@ -132,9 +302,192 @@ sources:
       date_from_url: '/releases/(\d{4}-\d{2}-\d{2})'
       min_expected_items: 3
 
-  # --- Community signal -------------------------------------------------------
+  # ============================================================================
+  # TIER B — DISCOVERY / JOURNALISM (trust_tier: REPUTABLE_SECONDARY)
+  #
+  # If a Tier B story reports a product/model/company announcement and a Tier A
+  # primary source exists for it, a future editorial pass should prefer the primary
+  # source for the final factual post — not implemented yet; see docs/sources.md.
+  # ============================================================================
+
+  - id: techcrunch_ai
+    name: TechCrunch — AI
+    enabled: true
+    adapter: rss
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: TechCrunch
+    publisher_region: UNITED_STATES
+    source_family: TechCrunch
+    priority: DISCOVERY
+    content_types: [NEWS]
+    editorial_role: >-
+      Broader AI industry news plus the stories vendors never publish about themselves:
+      controversies, failures, deepfakes, scams and viral oddities. The main supply of
+      non-announcement material.
+    tags: [industry, consumer, controversy, viral]
+
+  - id: the_verge_ai
+    name: The Verge — AI
+    enabled: true
+    adapter: rss
+    url: https://www.theverge.com/rss/ai-artificial-intelligence/index.xml
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: The Verge
+    publisher_region: UNITED_STATES
+    source_family: The Verge
+    priority: DISCOVERY
+    content_types: [NEWS]
+    editorial_role: >-
+      Consumer-tech-literate AI coverage — a second, editorially independent read on
+      the same announcements, plus stories the vendors themselves won't cover.
+    tags: [industry, consumer]
+
+  - id: ars_technica_ai
+    name: Ars Technica — AI
+    enabled: true
+    adapter: rss
+    url: https://arstechnica.com/ai/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: Ars Technica
+    publisher_region: UNITED_STATES
+    source_family: Ars Technica
+    priority: DISCOVERY
+    content_types: [NEWS, EXPLAINER]
+    editorial_role: >-
+      Technically deeper coverage than most consumer tech press — good background
+      material for an explainer-style post, not just a headline rewrite.
+    tags: [industry, technical]
+
+  - id: wired_ai
+    name: WIRED — AI
+    enabled: true
+    adapter: rss
+    url: https://www.wired.com/feed/tag/ai/latest/rss
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: WIRED
+    publisher_region: UNITED_STATES
+    source_family: WIRED
+    priority: DISCOVERY
+    content_types: [NEWS, EXPLAINER]
+    editorial_role: >-
+      Narrative, human-angle AI journalism — social and cultural impact stories the
+      vendor blogs never write.
+    tags: [industry, consumer, culture]
+
+  - id: mit_tech_review_ai
+    name: MIT Technology Review — AI
+    enabled: true
+    adapter: rss
+    url: https://www.technologyreview.com/topic/artificial-intelligence/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: MIT Technology Review
+    publisher_region: UNITED_STATES
+    source_family: MIT Technology Review
+    priority: DISCOVERY
+    content_types: [NEWS, RESEARCH, EXPLAINER]
+    editorial_role: >-
+      The most research-literate journalism in the mix — closest in depth to a primary
+      source without being one, and a reliable check on claims that sound too good.
+    tags: [industry, research, technical]
+
+  # ============================================================================
+  # TIER B — UKRAINIAN TECH/AI MEDIA (trust_tier: REPUTABLE_SECONDARY)
+  #
+  # Added Step 6B, section 6, after live verification (fetched directly over HTTPS,
+  # 2026-08-19, same User-Agent HttpClient sends): every URL below returned 200 with
+  # a real, parseable, recently-updated feed. AIN.UA's feed is a genuine AI-tag-
+  # filtered feed (like the Tier B AI-topic feeds above); DOU, dev.ua and Speka do
+  # not expose an AI-specific feed after a real attempt to find one (tag/category
+  # query parameters were tried and confirmed to be ignored, returning the same
+  # general feed) — their general feeds are used instead, same as any other general
+  # tech-press source, relying on the same classification/geography/capability funnel
+  # every other Tier B source already goes through. All four are UKRAINE-region under
+  # the new geography allowlist (see PublisherRegion) — this is genuinely why they
+  # were sought out: to give the allowlist a real Ukrainian source, not just US/UK/EU.
+  # ============================================================================
+
+  - id: dou_ua
+    name: DOU.ua
+    enabled: true
+    adapter: rss
+    url: https://dou.ua/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: DOU
+    publisher_region: UKRAINE
+    source_family: DOU
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukraine's largest developer-community publication — interviews, deeptech and
+      general IT news from Ukrainian companies and engineers. General feed, not
+      AI-specific (no AI-tag feed was found); relies on classification to surface the
+      genuinely AI-relevant stories among it.
+    tags: [ukraine, community, general_tech]
+
+  - id: ain_ua_ai
+    name: AIN.UA — AI
+    enabled: true
+    adapter: rss
+    url: https://ain.ua/tag/ai/feed/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: AIN.UA
+    publisher_region: UKRAINE
+    source_family: AIN.UA
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      A genuinely AI-tag-filtered feed from Ukraine's main business/tech news outlet —
+      Ukrainian companies adopting AI, local product launches, and AI stories with a
+      Ukrainian angle.
+    tags: [ukraine, industry, business]
+
+  - id: dev_ua
+    name: dev.ua
+    enabled: true
+    adapter: rss
+    url: https://dev.ua/rss
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: dev.ua
+    publisher_region: UKRAINE
+    source_family: dev.ua
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukrainian IT-industry media covering local and global tech, including AI, from a
+      Ukrainian-market angle. General feed, not AI-specific; relies on classification
+      the same way DOU's general feed does.
+    tags: [ukraine, industry, general_tech]
+
+  - id: speka_media
+    name: Speka
+    enabled: true
+    adapter: rss
+    url: https://speka.ua/rss
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: Speka
+    publisher_region: UKRAINE
+    source_family: Speka
+    priority: DISCOVERY
+    content_types: [NEWS]
+    language: uk
+    editorial_role: >-
+      Ukrainian media about technology and entrepreneurship. General feed (a large
+      archive — capped by max_items_per_fetch like openai_news), not AI-specific;
+      relies on classification the same way DOU's and dev.ua's general feeds do.
+    tags: [ukraine, business, general_tech]
+
+  # ============================================================================
+  # TIER C — COMMUNITY (trust_tier: COMMUNITY_SIGNAL)
+  #
   # Attention only. Never provenance, never article content: signal_only sources are
-  # refused by the normalizer and can only produce community_signals rows.
+  # refused by the normalizer and can only produce community_signals rows. Intended
+  # future use: AI_LIFEHACK / PROMPT_WORKFLOW / real-world usage material, not
+  # standalone factual NEWS posts — see docs/sources.md.
+  # ============================================================================
 
   - id: hackernews
     name: Hacker News (AI stories)
@@ -144,6 +497,11 @@ sources:
     trust_tier: COMMUNITY_SIGNAL
     signal_only: true
     publisher: Hacker News
+    publisher_region: UNITED_STATES
+    source_family: Hacker News
+    priority: COMMUNITY
+    content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
+    fulltext_policy: DISCOVERY_ONLY
     editorial_role: >-
       Tells us the tech community is suddenly discussing a story, which can indicate
       virality or that something is worth investigating. It never establishes that a
@@ -154,3 +512,246 @@ sources:
       window_hours: 72
       hits_per_query: 40
       min_points: 5
+
+  - id: lobsters_ai
+    name: Lobsters (ai tag)
+    enabled: true
+    adapter: rss
+    url: https://lobste.rs/t/ai.rss
+    trust_tier: COMMUNITY_SIGNAL
+    signal_only: true
+    publisher: Lobsters
+    publisher_region: UNITED_STATES
+    source_family: Lobsters
+    priority: COMMUNITY
+    content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
+    fulltext_policy: DISCOVERY_ONLY
+    editorial_role: >-
+      A smaller, more curated developer community than Hacker News — a second,
+      differently-biased attention signal, never a factual source.
+    tags: [community, attention, signal]
+
+  - id: producthunt_ai
+    name: Product Hunt — AI
+    enabled: true
+    adapter: rss
+    url: https://www.producthunt.com/feed?category=artificial-intelligence
+    trust_tier: COMMUNITY_SIGNAL
+    signal_only: true
+    publisher: Product Hunt
+    publisher_region: UNITED_STATES
+    source_family: Product Hunt
+    priority: COMMUNITY
+    content_types: [AI_TOOL, FREE_DEAL, AI_LIFEHACK]
+    fulltext_policy: DISCOVERY_ONLY
+    editorial_role: >-
+      New AI tool launches as the community votes on them — attention/discovery
+      signal for "here's a new tool," never a factual claim about what it does.
+    tags: [community, attention, signal, tools]
+
+  # ============================================================================
+  # DISABLED / FUTURE — no reliable machine-readable access found as of 2026-08-18.
+  # Kept in the registry (not deleted) so the research isn't silently lost and a
+  # future retry doesn't start from zero. See docs/sources.md for the full list.
+  # ============================================================================
+
+  - id: meta_ai
+    name: Meta AI Blog
+    enabled: false
+    adapter: html_changelog
+    url: https://ai.meta.com/blog/
+    trust_tier: OFFICIAL
+    publisher: Meta
+    publisher_region: UNITED_STATES
+    source_family: Meta
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL, RESEARCH]
+    editorial_role: >-
+      Llama and Meta AI product announcements — no feed exists today; would need a
+      maintained HTML changelog selector once the page's structure is reviewed.
+    tags: [product_update, llama, official]
+    disabled_reason: >-
+      No discoverable RSS/Atom feed as of 2026-08-18 — checked /blog/rss/, /blog/feed/,
+      /rss/, and the live page's HTML for a <link rel="alternate"> feed hint; none
+      found. The page is client-rendered, so a reliable html_changelog selector was
+      not attempted without first confirming the DOM is stable.
+
+  - id: cohere
+    name: Cohere Blog
+    enabled: false
+    adapter: html_changelog
+    url: https://cohere.com/blog
+    trust_tier: OFFICIAL
+    publisher: Cohere
+    publisher_region: OTHER
+    source_family: Cohere
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Enterprise-LLM vendor announcements — no working feed found.
+    tags: [product_update, official]
+    disabled_reason: >-
+      No working RSS as of 2026-08-18 — /blog/rss.xml and /rss.xml both 404, and
+      /blog?format=rss serves the same client-rendered HTML page rather than XML
+      (a Next.js app; the query param has no effect).
+
+  - id: stability_ai
+    name: Stability AI News
+    enabled: false
+    adapter: html_changelog
+    url: https://stability.ai/news
+    trust_tier: OFFICIAL
+    publisher: Stability AI
+    publisher_region: UNITED_KINGDOM
+    source_family: Stability AI
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Stable Diffusion and image-model announcements — no working feed found.
+    tags: [product_update, creative_ai, official]
+    disabled_reason: >-
+      No working RSS as of 2026-08-18 — /news/rss.xml (301) redirects to
+      /news?format=rss, which itself returns the HTML page (content-type text/html),
+      not XML; Squarespace's ?format=rss convention does not work for this site.
+
+  - id: xai
+    name: xAI News
+    enabled: false
+    adapter: html_changelog
+    url: https://x.ai/news
+    trust_tier: OFFICIAL
+    publisher: xAI
+    publisher_region: UNITED_STATES
+    source_family: xAI
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Grok announcements — the fetcher cannot currently reach this site at all.
+    tags: [product_update, official]
+    disabled_reason: >-
+      https://x.ai/news returns HTTP 403 to this fetcher as of 2026-08-18. No public
+      feed found. Not pursued further — this project does not attempt to bypass
+      anti-bot protection.
+
+  - id: perplexity_ai
+    name: Perplexity Blog
+    enabled: false
+    adapter: html_changelog
+    url: https://www.perplexity.ai/hub/blog
+    trust_tier: OFFICIAL
+    publisher: Perplexity
+    publisher_region: UNITED_STATES
+    source_family: Perplexity
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Perplexity product announcements — the fetcher cannot currently reach this site.
+    tags: [product_update, official]
+    disabled_reason: >-
+      https://www.perplexity.ai/hub/blog returns HTTP 403 to this fetcher as of
+      2026-08-18. No public feed found. Not pursued further — this project does not
+      attempt to bypass anti-bot protection.
+
+  - id: adobe_firefly
+    name: Adobe Firefly Blog
+    enabled: false
+    adapter: html_changelog
+    url: https://blog.adobe.com/en/topics/adobe-firefly
+    trust_tier: OFFICIAL
+    publisher: Adobe
+    publisher_region: UNITED_STATES
+    source_family: Adobe
+    priority: PRIMARY_NORMAL
+    content_types: [NEWS, AI_TOOL]
+    editorial_role: >-
+      Firefly generative-AI feature announcements — no working feed found.
+    tags: [product_update, creative_ai, official]
+    disabled_reason: >-
+      No discoverable RSS as of 2026-08-18 — /topics/adobe-firefly.rss,
+      /topics/adobe-firefly/rss.xml, /topics/adobe-firefly/feed and /en/feed.xml all
+      returned 404.
+
+  - id: venturebeat_ai
+    name: VentureBeat — AI
+    enabled: false
+    adapter: rss
+    url: https://venturebeat.com/category/ai/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: VentureBeat
+    publisher_region: UNITED_STATES
+    source_family: VentureBeat
+    priority: DISCOVERY
+    content_types: [NEWS]
+    editorial_role: >-
+      Enterprise-AI-focused industry journalism — feed URLs are protected by a
+      bot-detection challenge page.
+    tags: [industry]
+    disabled_reason: >-
+      Both /category/ai/feed/ and /feed/ return a bot-challenge "Redirecting..." page
+      (content-type text/plain, no real content) instead of XML as of 2026-08-18 —
+      Cloudflare-style protection. Not pursued further — this project does not attempt
+      to bypass anti-bot protection.
+
+  - id: reuters_technology
+    name: Reuters — Technology / AI
+    enabled: false
+    adapter: rss
+    url: https://www.reuters.com/technology/artificial-intelligence/
+    trust_tier: REPUTABLE_SECONDARY
+    publisher: Reuters
+    publisher_region: UNITED_KINGDOM
+    source_family: Reuters
+    priority: DISCOVERY
+    content_types: [NEWS]
+    editorial_role: >-
+      Wire-service-grade AI industry reporting — Reuters retired its free public feeds.
+    tags: [industry]
+    disabled_reason: >-
+      https://www.reuters.com/technology/artificial-intelligence/rss returns HTTP 401
+      as of 2026-08-18 — no public RSS is offered any more (Reuters retired its free
+      feeds); the legacy feeds.reuters.com mirror no longer resolves either.
+
+  - id: reddit_ai
+    name: Reddit (r/artificial, r/MachineLearning, r/OpenAI)
+    enabled: false
+    adapter: rss
+    url: https://www.reddit.com/r/artificial/
+    trust_tier: COMMUNITY_SIGNAL
+    signal_only: true
+    publisher: Reddit
+    publisher_region: UNITED_STATES
+    source_family: Reddit
+    priority: COMMUNITY
+    content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
+    fulltext_policy: DISCOVERY_ONLY
+    editorial_role: >-
+      Would be a community attention signal, same role as Hacker News/Lobsters — no
+      stable anonymous access currently exists.
+    tags: [community, attention, signal]
+    disabled_reason: >-
+      HTTP 429 rate-limiting on the .rss endpoints for r/artificial, r/MachineLearning
+      and r/OpenAI, reproduced on 3 consecutive retries with delay on 2026-08-18 — no
+      stable anonymous access without authentication. Not pursued further rather than
+      building a workaround for an unstable endpoint.
+
+  - id: x_threads
+    name: X / Threads
+    enabled: false
+    adapter: html_changelog
+    url: https://x.com
+    trust_tier: COMMUNITY_SIGNAL
+    signal_only: true
+    publisher: X
+    publisher_region: UNITED_STATES
+    source_family: X
+    priority: COMMUNITY
+    content_types: [AI_LIFEHACK, PROMPT_WORKFLOW]
+    fulltext_policy: DISCOVERY_ONLY
+    editorial_role: >-
+      Would be a community attention/reaction signal — no lawful, stable, free access
+      mechanism exists.
+    tags: [community, attention, signal]
+    disabled_reason: >-
+      No free, lawful, stable public RSS/API access without authentication exists for
+      either X or Threads. Not attempted — per explicit instruction not to build
+      unstable scraping for these platforms.

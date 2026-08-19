@@ -555,6 +555,11 @@ class TestNoBypass:
             # socket. The client is still the only thing that sends.
             "publishing/plan.py",
             "publishing/rich.py",
+            # Step 5: builds the same Step/BundlePlan shape publishing/plan.py does,
+            # from a rendered editorial post instead of an approved DraftVersion. Names
+            # the method in a plan, same as publishing/plan.py — never opens a socket;
+            # publishing/telegram.py remains the only thing that actually sends.
+            "rendering/plan.py",
         }
         offenders = [
             path.relative_to(package_root).as_posix()

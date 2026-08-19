@@ -1,0 +1,89 @@
+{
+  "_fixture": true,
+  "_purpose": "Step 3 (AI News Agent v2) section 34 — one illustrative candidate per EditorialCategory, for tests and manual exploration of editorial/preview.py and editorial/policy.py. None of this is real published content or a claim about any real company/product/story; every URL is *.invalid and every fact is invented for the shape of the example, not for accuracy.",
+  "samples": [
+    {
+      "content_type": "NEWS",
+      "source_id": "example_vendor_blog",
+      "source_family": "ExampleCorp",
+      "trust_tier": "OFFICIAL",
+      "title": "ExampleCorp ships version 4 of its assistant API",
+      "url": "https://blog.example.invalid/assistant-v4",
+      "evidence_type": "PRIMARY_SOURCE",
+      "note": "A vendor's own announcement of a shipped change."
+    },
+    {
+      "content_type": "AI_TOOL",
+      "source_id": "producthunt_example",
+      "source_family": "Product Hunt",
+      "trust_tier": "COMMUNITY_SIGNAL",
+      "title": "New tool: turns meeting notes into a task list",
+      "url": "https://producthunt.invalid/posts/example-tool",
+      "evidence_type": "COMMUNITY_DISCUSSION",
+      "note": "A tool discovered via community discussion, not a vendor announcement."
+    },
+    {
+      "content_type": "FREE_DEAL",
+      "source_id": "example_vendor_blog",
+      "source_family": "ExampleCorp",
+      "trust_tier": "OFFICIAL",
+      "title": "Free tier of ExampleCorp Studio, no time limit",
+      "url": "https://blog.example.invalid/studio-free-tier",
+      "evidence_type": "OFFICIAL_PRODUCT_PAGE",
+      "note": "Explicit free-tier evidence on the product's own page — what validate_free_deal requires."
+    },
+    {
+      "content_type": "AI_LIFEHACK",
+      "source_id": "hn_example",
+      "source_family": "Hacker News",
+      "trust_tier": "COMMUNITY_SIGNAL",
+      "title": "Хтось поділився, що використовує чат-бота для чорнових чернеток",
+      "url": "https://news.ycombinator.invalid/item?id=1",
+      "evidence_type": "USER_REPORTED",
+      "note": "Must be framed as a report ('хтось поділився...'), never as an established fact about the tool.",
+      "framed_as_report": true
+    },
+    {
+      "content_type": "PROMPT_WORKFLOW",
+      "source_id": "reddit_example",
+      "source_family": "Reddit",
+      "trust_tier": "COMMUNITY_SIGNAL",
+      "title": "A prompt for summarizing long PDFs",
+      "url": "https://reddit.invalid/r/example/comments/1",
+      "evidence_type": "COMMUNITY_DISCUSSION",
+      "prompt_origin": "SOURCE_ADAPTED",
+      "note": "Reworded from the source for readability — must never be shown in quotes (see PromptOrigin.SOURCE_ADAPTED)."
+    },
+    {
+      "content_type": "EXPLAINER",
+      "source_id": "example_vendor_blog",
+      "source_family": "ExampleCorp",
+      "trust_tier": "OFFICIAL",
+      "title": "What is retrieval-augmented generation?",
+      "url": "https://blog.example.invalid/what-is-rag",
+      "evidence_type": "PRIMARY_SOURCE",
+      "note": "A durable, non-dated concept explanation, not tied to a specific announcement."
+    },
+    {
+      "content_type": "RESEARCH",
+      "source_id": "example_research_lab",
+      "source_family": "ExampleCorp",
+      "trust_tier": "OFFICIAL",
+      "title": "New benchmark result on long-context reasoning",
+      "url": "https://research.example.invalid/papers/long-context",
+      "evidence_type": "RESEARCH_PAPER",
+      "research_claim_framing": "PAPER_RESULT",
+      "note": "Framed as the paper's own reported result, not the company's marketing claim about it."
+    },
+    {
+      "content_type": "WEEKLY_DIGEST",
+      "source_id": "internal_digest",
+      "source_family": null,
+      "trust_tier": null,
+      "title": "This week in AI: 5 things worth knowing",
+      "url": null,
+      "evidence_type": null,
+      "note": "An aggregation of already-classified items; each keeps its own category/evidence, none are re-classified here."
+    }
+  ]
+}

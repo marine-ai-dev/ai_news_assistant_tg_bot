@@ -17,8 +17,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from ai_news_editor.domain.enums import EditorialDecision
-from ai_news_editor.domain.errors import AiNewsError
+from ai_news_editor.domain.enums import EditorialCategory, EditorialDecision
+from ai_news_editor.domain.errors import AiNewsError, ConfigurationError
 from ai_news_editor.editorial.export import build_batch, stale_evaluations
 from ai_news_editor.editorial.import_results import (
     EditorialImportError,
@@ -26,12 +26,21 @@ from ai_news_editor.editorial.import_results import (
     load_reviewed,
     validate_against_database,
 )
+from ai_news_editor.editorial.preview import PreviewCandidate, build_preview
 from ai_news_editor.editorial.rubric import (
     CREDIBILITY_SHORTLIST_THRESHOLD,
     RUBRIC_VERSION,
     SCHEMA_VERSION,
 )
-from ai_news_editor.storage.repositories import ArticleRepository, EvaluationRepository
+from ai_news_editor.planning.recent_history import recent_history
+from ai_news_editor.settings import get_settings
+from ai_news_editor.sources.config import load_sources_config
+from ai_news_editor.storage.repositories import (
+    ArticleRepository,
+    DraftRepository,
+    EvaluationRepository,
+    PublicationRepository,
+)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -267,6 +276,134 @@ def show_shortlist(
         "[dim]Read-only. Nothing here is approved, drafted or published — Phase 5 turns "
         "shortlisted stories into drafts, and a human still approves every post.[/dim]"
     )
+
+
+@app.command("preview")
+def preview_editorial(
+    limit: Annotated[int, typer.Option("--limit", "-n", help="How many to show.")] = 10,
+    all_categories: Annotated[
+        bool,
+        typer.Option(
+            "--all-categories",
+            help="Show one rendered Telegram-preview example per EditorialCategory, "
+            "from offline synthetic fixtures. No database, no network, no Gemini.",
+        ),
+    ] = False,
+) -> None:
+    """Deterministic preview of editorial classification and diversity ranking.
+
+    No Gemini call, no Telegram call — reads only what is already in the database and
+    the source registry (config/sources.yaml), and shows why each shortlisted
+    candidate ranks where it does: its source family and trust tier, whether that
+    source's registry metadata actually supports its content type and evidence
+    classification, and the diversity adjustment against recent publications.
+
+    ``--all-categories`` instead shows a fully offline sample gallery: one rendered
+    Telegram post per category, from synthetic fixtures (``rendering.fixtures``) —
+    useful for reviewing the visual style itself without a database or a live
+    candidate.
+    """
+    if all_categories:
+        _preview_all_categories()
+        return
+
+    from ai_news_editor.cli.main import open_migrated_database
+
+    connection = open_migrated_database()
+    try:
+        evaluations = EvaluationRepository(connection)
+        articles = ArticleRepository(connection)
+        try:
+            registry = load_sources_config(get_settings().sources_config_path)
+        except ConfigurationError as exc:
+            err_console.print(f"[bold red]Could not load source registry:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
+        sources_by_id = {source.id: source for source in registry.sources}
+
+        shortlisted = evaluations.shortlist(limit=limit)
+        candidates = []
+        for evaluation in shortlisted:
+            article = articles.get(evaluation.article_id)
+            candidates.append(
+                PreviewCandidate(
+                    article_id=article.id,
+                    title=article.title,
+                    source_id=article.source_id,
+                    editorial_category=evaluation.editorial_category or EditorialCategory.NEWS,
+                    evidence_type=evaluation.evidence_type,
+                    composite_score=evaluation.composite_score,
+                )
+            )
+
+        recent = recent_history(
+            publications=PublicationRepository(connection),
+            drafts=DraftRepository(connection),
+            articles=articles,
+            evaluations=evaluations,
+            sources=registry,
+        )
+    finally:
+        connection.close()
+
+    rows = build_preview(candidates, sources_by_id, recent)
+
+    if not rows:
+        console.print("[yellow]Nothing shortlisted yet.[/yellow] Run an editorial review first.")
+        return
+
+    # Four wide columns rather than nine narrow ones: a Rich Table under a narrow
+    # (or non-interactive/CI) terminal width squeezes every column to fit, which for
+    # nine columns can cut cell text down to a handful of characters. Grouping related
+    # facts into one column keeps each one legible regardless of terminal width.
+    table = Table(title="Editorial preview — deterministic, no Gemini, no Telegram")
+    table.add_column("Candidate")
+    table.add_column("Source")
+    table.add_column("Classification")
+    table.add_column("Capability")
+    table.add_column("Score", justify="right")
+    for row in rows:
+        table.add_row(
+            row.candidate.title,
+            f"{row.candidate.source_id}\n"
+            f"{row.source_family or '—'} · {row.trust_tier.value if row.trust_tier else '—'}",
+            f"{row.candidate.editorial_category.value}\n"
+            f"{row.candidate.evidence_type.value if row.candidate.evidence_type else '—'}",
+            "[green]ok[/green]" if row.capability_ok else f"[red]{row.capability_reason}[/red]",
+            f"{row.final_score:.1f}\n[dim]({row.diversity_adjustment:+.1f} diversity)[/dim]",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Read-only, deterministic. content_type/evidence come from evaluations "
+        "classified via Step 3's schema; a shortlisted candidate with none defaults to "
+        "NEWS, as every automated evaluation has produced so far.[/dim]"
+    )
+
+
+def _preview_all_categories() -> None:
+    """Section 46: eight rendered examples, entirely offline."""
+    from ai_news_editor.media.models import MediaOutcome, RejectionReason
+    from ai_news_editor.media.workspace import MediaWorkspace
+    from ai_news_editor.rendering.fixtures import SAMPLE_CONTENT
+    from ai_news_editor.rendering.plan import build_publication_plan
+
+    console.print(
+        "[bold]Editorial style gallery[/bold] — offline synthetic fixtures, "
+        "no database, no network, no Gemini, no Telegram.\n"
+    )
+    with MediaWorkspace(label="preview-gallery") as workspace:
+        for category, content in SAMPLE_CONTENT.items():
+            outcome = MediaOutcome(media=None, reason=RejectionReason.POLICY_FORBIDS)
+            variant, plan = build_publication_plan(content, outcome, workspace)
+            rendered_text = plan.steps[0].text or ""
+            body = (
+                f"[dim]evidence: {content.evidence.value} · plan: {variant.value}[/dim]\n\n"
+                f"{rendered_text}"
+            )
+            if plan.warnings:
+                body += "\n\n[yellow]" + "; ".join(plan.warnings) + "[/yellow]"
+            console.print(
+                Panel(body, title=f"{category.value}", title_align="left", border_style="cyan")
+            )
 
 
 @app.command("status")
