@@ -367,7 +367,7 @@ def _run_pipeline(
     # deliberate manual test should never be blocked by automated activity earlier in
     # the day either.
     if mode == "live":
-        published_today = _production_publications_today(connection, settings, moment)
+        published_today = production_publications_today(connection, settings, moment)
         if published_today >= settings.daily_post_limit:
             return AutomationResult(
                 Outcome.DAILY_LIMIT_REACHED,
@@ -829,8 +829,18 @@ def _persist(connection, validated: _Validated) -> UUID:
     return report.draft_ids[0]
 
 
-def _production_publications_today(connection, settings: Settings, moment: datetime) -> int:
-    """How many gemini:auto posts already reached the production channel today."""
+def production_publications_today(
+    connection, settings: Settings, moment: datetime, *, actor: str = AUTOMATION_ACTOR
+) -> int:
+    """How many ``actor`` posts already reached the production channel today.
+
+    Public (and ``actor``-parameterized) so any pipeline version's scheduled entrypoint
+    can share this same count against ``AI_NEWS_DAILY_POST_LIMIT`` — the daily cap is a
+    property of the production channel, not of which pipeline handled a given post. v1's
+    own call site (above) always passes the default ``AUTOMATION_ACTOR`` ("gemini:auto"),
+    which the v2 scheduled pipeline (``automation.pipeline_v2_live``) also uses as its
+    approval actor for exactly this reason — both draw from one shared ledger.
+    """
     if not settings.telegram_channel:
         return 0
     publications = PublicationRepository(connection)
@@ -846,6 +856,6 @@ def _production_publications_today(connection, settings: Settings, moment: datet
         if to_local(publication.published_at, CHANNEL_TIMEZONE).date() != day:
             continue
         decision = decisions.get(publication.review_decision_id)
-        if decision.actor == AUTOMATION_ACTOR:
+        if decision.actor == actor:
             count += 1
     return count
