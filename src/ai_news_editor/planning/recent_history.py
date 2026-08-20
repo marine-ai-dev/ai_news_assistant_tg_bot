@@ -37,8 +37,13 @@ def recent_history(
     evaluations: EvaluationRepository,
     sources: SourcesConfig,
     limit: int = 10,
+    channel: str | None = None,
 ) -> list[RecentPost]:
     """The last ``limit`` successful publications, newest first, as ``RecentPost``.
+
+    ``channel``, when given, restricts this to publications sent to that one channel —
+    e.g. a TEST-channel soak or dispatch should never see (or be scored against) a
+    production post's diversity history, and vice versa.
 
     Every article-derived (NEWS) draft published to date carries no
     ``editorial_category`` on its evaluation yet — migration 014's own documented
@@ -50,6 +55,8 @@ def recent_history(
     posts: list[RecentPost] = []
     for publication in publications.list_recent(limit=limit * 4):
         if publication.status != PublicationStatus.SUCCEEDED:
+            continue
+        if channel is not None and publication.channel != channel:
             continue
         if len(posts) >= limit:
             break

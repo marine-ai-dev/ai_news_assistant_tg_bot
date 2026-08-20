@@ -1,4 +1,4 @@
-"""``ai-news auto`` — the unattended NEWS pipeline, run once per invocation.
+"""``ai-news auto`` — the unattended editorial pipeline, run once per invocation.
 
 One command runs the whole thing: collect, normalize, select, fetch, generate,
 validate, approve, publish — in that order, stopping at the first step that has nothing
@@ -12,8 +12,15 @@ being retried against more candidates. There is no long-running process here and
 nothing to keep alive; a scheduled GitHub Actions run is one call to ``auto once`` and
 then the process exits, same as ``ai-news collect`` or ``ai-news publish`` always have.
 
-Three modes, one function underneath (``automation.pipeline.run_pass``, which collects
-and normalizes before handing off to ``run_automation`` for selection onward):
+Three modes. ``--dry-run`` and ``--test`` still run v1's NEWS-only pipeline
+(``automation.pipeline.run_pass``, which collects and normalizes before handing off to
+``run_automation`` for selection onward) — the default (live) mode instead runs the full
+v2 editorial pipeline (``automation.pipeline_v2_live.run_pass_v2``), selecting from the
+complete ``EditorialCategory`` range (NEWS, RESEARCH, AI_TOOL, AI_LIFEHACK, FREE_DEAL,
+PROMPT_WORKFLOW, EXPLAINER — never WEEKLY_DIGEST, which needs a week of history as its
+own input) and sending through v2's branded-card/media rendering, not v1's plain-text
+one. See ``pipeline_v2_live``'s module docstring for the full reasoning. v2's own
+test-channel path is the separate ``ai-news auto soak-v2 --test`` command.
 
 * ``--dry-run`` never contacts Telegram and never approves anything. Collection and
   normalization still run for real — a fresh GitHub Actions runner starting from an
@@ -39,8 +46,8 @@ and normalizes before handing off to ``run_automation`` for selection onward):
   flag to stay safe.
 
 Nothing here can approve a PROMPT or a TESTED_USE_CASE, because nothing here looks for
-one — nothing in this module content-type-filters at all; the automation pipeline itself
-only ever selects from NEWS candidates.
+one — dry-run/test (v1) never content-type-filter beyond NEWS, and live (v2) is bounded
+to its own real ``EditorialCategory`` enum, never an arbitrary content type.
 """
 
 from __future__ import annotations
@@ -78,18 +85,26 @@ def _settings() -> Settings:
 
 
 def _run_once(*, mode: str) -> AutomationResult:
-    """Open the canonical database and hand off to run_pass. Shared by once/run.
+    """Open the canonical database and hand off to run_pass (or, for live mode, the
+    v2 pipeline). Shared by once/run.
 
-    Everything about collection, normalization and which database actually gets
-    written to lives in automation.pipeline.run_pass now — this function's only job is
-    the CLI-specific part: load settings, open and eventually close the one real,
-    on-disk connection every mode starts from.
+    ``"live"`` now runs ``automation.pipeline_v2_live.run_pass_v2`` — the full v2
+    editorial/media pipeline — instead of v1's NEWS-only ``run_pass``. ``"dry-run"``
+    and ``"test"`` are unchanged: they still exercise v1 (v2's own test-channel path is
+    ``ai-news auto soak-v2 --test``, a separate command). See pipeline_v2_live's module
+    docstring for why: both return the exact same ``AutomationResult`` contract, so
+    everything downstream of this function (reporting, GITHUB_OUTPUT, the workflow's
+    persist-state gate) needs no changes either way.
     """
     from ai_news_editor.cli.main import open_migrated_database
 
     settings = _settings()
     connection = open_migrated_database()
     try:
+        if mode == "live":
+            from ai_news_editor.automation.pipeline_v2_live import run_pass_v2
+
+            return run_pass_v2(connection, settings)
         return run_pass(connection, settings, mode=mode)  # type: ignore[arg-type]
     finally:
         # Fold the WAL into the main file before closing, rather than trusting SQLite's
@@ -166,7 +181,12 @@ def auto_once(
     ] = False,
 ) -> None:
     """One automation pass: collect, select, generate, validate, and — unless
-    --dry-run — approve and publish at most one NEWS post.
+    --dry-run — approve and publish at most one post.
+
+    Live mode (the default, and always what a scheduled run uses) runs the full v2
+    editorial pipeline: NEWS, RESEARCH, AI_TOOL, AI_LIFEHACK, FREE_DEAL,
+    PROMPT_WORKFLOW or EXPLAINER, whichever real classification picks.
+    --dry-run/--test still run v1's older NEWS-only pipeline.
 
     Exits 0 for a normal quiet outcome (nothing to publish, automation disabled,
     Gemini declined, the daily limit was already reached) and 1 only for a genuine

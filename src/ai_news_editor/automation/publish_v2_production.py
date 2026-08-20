@@ -36,6 +36,7 @@ smoke test is neither, and must not be counted as either.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -119,18 +120,30 @@ def publish_one_v2_post_to_production(
     telegram: TelegramClient,
     target_channel: str,
     category_preference: tuple[EditorialCategory, ...],
+    excluded_categories: frozenset[EditorialCategory] = _EXCLUDED_CATEGORIES,
+    recent: Sequence[RecentPost] = (),
+    actor: str = MANUAL_V2_ACTOR,
 ) -> PublishV2Result:
     """Send exactly one real v2 post to ``target_channel`` and record it.
 
     ``category_preference`` narrows the candidate pool to sources capable of at least
     one of these categories (a soft preference — real classification still decides the
-    final category), in the given order of preference. NEWS and RESEARCH are always
-    hard-excluded regardless of what narrowing lets through, since real classification
-    is not bound by the narrowing.
+    final category), in the given order of preference. ``excluded_categories`` is
+    always hard-enforced against the real classification regardless of what narrowing
+    lets through (defaults to NEWS/RESEARCH — this function's original manual-smoke-test
+    contract; the scheduled v2 pipeline in ``automation.pipeline_v2_live`` passes its own
+    set instead, since a full production cutover wants NEWS/RESEARCH included).
+
+    ``recent`` seeds real cross-run source/category diversity scoring (empty by default
+    — a one-off manual smoke test has no meaningful "recent" context of its own).
+    ``actor`` is who the resulting Draft/Publication's review decision is recorded
+    under (defaults to :data:`MANUAL_V2_ACTOR`); the scheduled pipeline passes
+    ``automation.pipeline.AUTOMATION_ACTOR`` instead, so its posts count against the
+    same daily limit ledger v1 always has.
 
     Raises:
         NoEligibleCandidateError: no real candidate produced a publishable post outside
-            NEWS/RESEARCH within the bounded attempt budget. Nothing was sent.
+            ``excluded_categories`` within the bounded attempt budget. Nothing was sent.
     """
     sources_by_id = {source.id: source for source in registry.sources}
 
@@ -139,7 +152,7 @@ def publish_one_v2_post_to_production(
         return source.trust_tier if source else TrustTier.UNVERIFIED
 
     used: set[UUID] = set()
-    recent: list[RecentPost] = []
+    recent = list(recent)
 
     attempts = 0
     while attempts < MAX_ATTEMPTS:
@@ -197,7 +210,7 @@ def publish_one_v2_post_to_production(
                 used.update(c.article_id for c in contexts)
                 continue
 
-            if outcome.content.category in _EXCLUDED_CATEGORIES:
+            if outcome.content.category in excluded_categories:
                 logger.info(
                     "v2_production_candidate_excluded_category",
                     extra={"category": outcome.content.category.value},
@@ -248,6 +261,7 @@ def publish_one_v2_post_to_production(
             message_id=main_message_id,
             headline=outcome.content.headline,
             source_url=outcome.content.source_url,
+            actor=actor,
         )
 
         logger.info(
@@ -282,6 +296,7 @@ def _record_production_send(
     message_id: int,
     headline: str,
     source_url: str,
+    actor: str,
 ) -> tuple[UUID, UUID]:
     """Write the audit trail for an already-successful send. Never re-renders,
     never re-sends — this is bookkeeping for dedup and the review-decision log only.
@@ -296,11 +311,11 @@ def _record_production_send(
         audience=AudienceTier.GENERAL,
         source_attribution=f"🔗 Джерело: v2\n{source_url}",
         source_url=source_url,
-        created_by=MANUAL_V2_ACTOR,
+        created_by=actor,
     )
     drafts.set_status(draft.id, DraftStatus.PENDING_REVIEW)
     authorization = approve_draft(
-        connection, draft.id, actor=MANUAL_V2_ACTOR, expected_version_id=version.id
+        connection, draft.id, actor=actor, expected_version_id=version.id
     )
     # APPROVED -> PUBLISHING -> PUBLISHED: the two-step transition the state machine
     # requires (see domain/transitions.py) — this send already succeeded, so both

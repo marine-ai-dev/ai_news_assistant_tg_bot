@@ -5,16 +5,21 @@ name: AI News — automated NEWS publish
 # from a terminal. See the "Automated NEWS pipeline" section of the README before
 # changing anything here.
 #
-# Scope, unconditionally: NEWS only, from a configured OFFICIAL source.
+# Scope: mode "live" (the schedule, always) runs the full v2 editorial pipeline —
+# NEWS, RESEARCH, AI_TOOL, AI_LIFEHACK, FREE_DEAL, PROMPT_WORKFLOW, EXPLAINER, from any
+# configured, geography-eligible source (never WEEKLY_DIGEST). "dry-run" and "test"
+# still exercise v1's older NEWS-only-from-OFFICIAL-sources path — see cli/auto.py's
+# and automation/pipeline_v2_live.py's module docstrings for the split.
 #
 # AI_NEWS_AUTOMATION_ENABLED gates LIVE publishing only — checked inside the
-# application (automation/pipeline.py), not here. dry-run and test both run
-# regardless of it, on purpose: a manual workflow_dispatch must be able to prove a
-# prompt or send a real test-channel message while the switch stays off, which is
-# this project's expected steady state once the schedule below exists. The schedule
-# itself always resolves to mode "live" (see the Resolve mode step) and so is always
-# subject to the switch — this workflow cannot make the cron publish by picking a
-# different mode, because the schedule trigger never reads `mode` at all.
+# application (automation/pipeline_v2_live.py for live, automation/pipeline.py for
+# dry-run/test), not here. dry-run and test both run regardless of it, on purpose: a
+# manual workflow_dispatch must be able to prove a prompt or send a real test-channel
+# message while the switch stays off, which is this project's expected steady state
+# once the schedule below exists. The schedule itself always resolves to mode "live"
+# (see the Resolve mode step) and so is always subject to the switch — this workflow
+# cannot make the cron publish by picking a different mode, because the schedule
+# trigger never reads `mode` at all.
 
 on:
   workflow_dispatch:
