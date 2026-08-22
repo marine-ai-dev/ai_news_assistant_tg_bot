@@ -27,6 +27,8 @@ from ai_news_editor.domain.enums import (
     TERMINAL_QUEUE_STATUSES,
     ArticleStatus,
     AudienceTier,
+    CanonicalResolutionStatus,
+    CanonicalSourceType,
     Category,
     ContentOrigin,
     ContentType,
@@ -183,6 +185,51 @@ class DuplicateCandidate(ImmutableDomainModel):
     simhash: int | None = None
     published_at: UtcDatetime | None = None
     text_length: int = 0
+
+
+class SourceCandidate(ImmutableDomainModel):
+    """One known reference for a claim — Step 1 (AI News Agent v3).
+
+    Either the discovery source of a :class:`CanonicalResolution`, or one of the
+    other candidates it was asked to rank against. A pure value object: never
+    persisted on its own, never mutated, and never constructed by inventing a URL —
+    every producer of one must have actually observed this URL somewhere (a source's
+    own feed item, a resolved release-notes page, and so on).
+    """
+
+    url: NonEmptyStr
+    source_type: CanonicalSourceType
+    #: The registry source id this came from, when known — e.g. ``"google_ai_blog"``.
+    #: ``None`` for a candidate not tied to any configured source (an author's own
+    #: post, a paper found ad hoc).
+    source_id: str | None = None
+    #: Short human label for display (e.g. the publisher name) — never required,
+    #: never used for ranking.
+    label: str | None = None
+
+
+class CanonicalResolution(ImmutableDomainModel):
+    """What ``sources.canonical.resolve_canonical_source`` returns — Step 1 (AI News
+    Agent v3).
+
+    ``canonical_source`` is always exactly ``discovery_source`` or one member of
+    ``ranked_candidates`` (compared by URL) — the resolver this accompanies never
+    constructs a new URL. ``status`` names which case applied, so a caller never has
+    to infer it by string-comparing URLs itself. ``ranked_candidates`` preserves every
+    usable candidate considered, best first, so a later step (event clustering,
+    editorial review, an audit trail) can inspect the full set, not only the winner.
+
+    Deliberately not yet mirrored into any DB table — nothing in the live pipeline
+    produces real discovery/canonical pairs yet (see docs/v3.md § Step 1 scope). This
+    is the data shape a later step attaches to an ``Article`` or an
+    ``EditorialContent`` once it does.
+    """
+
+    discovery_source: SourceCandidate
+    canonical_source: SourceCandidate
+    status: CanonicalResolutionStatus
+    ranked_candidates: tuple[SourceCandidate, ...] = ()
+    reason: NonEmptyStr
 
 
 class Evaluation(ImmutableDomainModel):
