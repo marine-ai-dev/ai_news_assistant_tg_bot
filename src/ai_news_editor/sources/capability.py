@@ -36,6 +36,7 @@ _CATEGORY_TO_CAPABILITY: dict[EditorialCategory, ContentCapability] = {
     EditorialCategory.EXPLAINER: ContentCapability.EXPLAINER,
     EditorialCategory.RESEARCH: ContentCapability.RESEARCH,
     EditorialCategory.WEEKLY_DIGEST: ContentCapability.WEEKLY_DIGEST_INPUT,
+    EditorialCategory.AI_AUTOMATION: ContentCapability.AI_AUTOMATION,
 }
 
 #: What evidence strength a source's trust tier can legitimately vouch for. The one

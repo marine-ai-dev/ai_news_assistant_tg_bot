@@ -77,6 +77,7 @@ _CATEGORY_PREFERENCE: tuple[EditorialCategory, ...] = (
     EditorialCategory.FREE_DEAL,
     EditorialCategory.EXPLAINER,
     EditorialCategory.RESEARCH,
+    EditorialCategory.AI_AUTOMATION,
 )
 
 

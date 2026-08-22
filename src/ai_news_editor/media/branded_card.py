@@ -108,6 +108,7 @@ _CATEGORY_LABELS: dict[EditorialCategory, str] = {
     EditorialCategory.EXPLAINER: "ПОЯСНЮЄМО",
     EditorialCategory.RESEARCH: "ДОСЛІДЖЕННЯ",
     EditorialCategory.WEEKLY_DIGEST: "ОГЛЯД ТИЖНЯ",
+    EditorialCategory.AI_AUTOMATION: "АВТОМАТИЗАЦІЯ",
 }
 
 
@@ -298,6 +299,26 @@ def _draw_books(draw: ImageDraw.ImageDraw, c: tuple[int, int], r: int, color: _R
         draw.rectangle((cx - r * w, top, cx + r * w, top + r * 0.35), fill=color)
 
 
+def _draw_gear(draw: ImageDraw.ImageDraw, c: tuple[int, int], r: int, color: _RGB) -> None:
+    """AI_AUTOMATION — a simple cog: a circular body with four square teeth, the same
+    plain-shapes style every other icon here uses (no hollow center, matching how
+    ``_draw_lightbulb``/``_draw_books`` never cut into their own fill either)."""
+    cx, cy = c
+    draw.ellipse((cx - r * 0.55, cy - r * 0.55, cx + r * 0.55, cy + r * 0.55), fill=color)
+    tooth = r * 0.32
+    for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+        offset = r * 0.7
+        draw.rectangle(
+            (
+                cx + dx * offset - tooth / 2,
+                cy + dy * offset - tooth / 2,
+                cx + dx * offset + tooth / 2,
+                cy + dy * offset + tooth / 2,
+            ),
+            fill=color,
+        )
+
+
 _ICON_DRAWERS = {
     EditorialCategory.NEWS: _draw_rocket,
     EditorialCategory.AI_TOOL: _draw_wrench,
@@ -307,6 +328,7 @@ _ICON_DRAWERS = {
     EditorialCategory.EXPLAINER: _draw_brain,
     EditorialCategory.RESEARCH: _draw_microscope,
     EditorialCategory.WEEKLY_DIGEST: _draw_books,
+    EditorialCategory.AI_AUTOMATION: _draw_gear,
 }
 
 

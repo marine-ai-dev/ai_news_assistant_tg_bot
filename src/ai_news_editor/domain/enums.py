@@ -53,6 +53,8 @@ class ContentCapability(StrEnum):
     EXPLAINER = "EXPLAINER"
     RESEARCH = "RESEARCH"
     WEEKLY_DIGEST_INPUT = "WEEKLY_DIGEST_INPUT"
+    #: AI News Agent v3 priority step — mirrors EditorialCategory.AI_AUTOMATION.
+    AI_AUTOMATION = "AI_AUTOMATION"
 
 
 class MediaPolicy(StrEnum):
@@ -133,6 +135,68 @@ class FulltextPolicy(StrEnum):
     DISCOVERY_ONLY = "DISCOVERY_ONLY"
 
 
+class CanonicalSourceType(StrEnum):
+    """Where one specific URL sits in the source-first citation hierarchy — Step 1
+    (AI News Agent v3).
+
+    Order matters: this is the exact preference hierarchy
+    ``sources.canonical.resolve_canonical_source`` ranks candidates by, most preferred
+    first — encoded explicitly as a priority mapping in that module rather than relied
+    on as enum declaration order, so a future member insertion here can never silently
+    reorder the policy. A discovery signal on its own (a Telegram post, an aggregator
+    hit, an unverified tip) is never a member of this hierarchy — see
+    :class:`CanonicalResolutionStatus` for how "nothing canonical is known yet" is
+    represented instead of inventing a rank for it.
+
+    Not to be confused with :class:`FulltextPolicy`'s own, unrelated
+    ``DISCOVERY_ONLY`` member (whether a *source* is ever fulltext-fetched at all) or
+    with :class:`CanonicalResolutionStatus` (the *outcome* of one resolution call).
+    """
+
+    #: Official company/product blog post.
+    OFFICIAL_BLOG = "OFFICIAL_BLOG"
+    #: Official release notes / changelog entry.
+    RELEASE_NOTES = "RELEASE_NOTES"
+    #: Official product page describing the thing itself, not an announcement of it.
+    OFFICIAL_PRODUCT_PAGE = "OFFICIAL_PRODUCT_PAGE"
+    #: Official GitHub repository or release.
+    OFFICIAL_GITHUB = "OFFICIAL_GITHUB"
+    #: Official research/project page (e.g. a lab's own project site), distinct from
+    #: the paper itself.
+    OFFICIAL_RESEARCH_PAGE = "OFFICIAL_RESEARCH_PAGE"
+    #: The paper itself (arXiv or a venue's own page).
+    RESEARCH_PAPER = "RESEARCH_PAPER"
+    #: An author's or team's own announcement, not published through an official
+    #: company channel (e.g. a personal blog post, an official X account's post).
+    AUTHOR_ANNOUNCEMENT = "AUTHOR_ANNOUNCEMENT"
+    #: A reputable secondary outlet reporting on the story — used only when no
+    #: suitable original source is available.
+    REPUTABLE_SECONDARY = "REPUTABLE_SECONDARY"
+    #: A community/aggregator/discovery signal used as the citation itself — the
+    #: bottom of the hierarchy, never preferred over any other member.
+    COMMUNITY_DISCOVERY_SIGNAL = "COMMUNITY_DISCOVERY_SIGNAL"
+
+
+class CanonicalResolutionStatus(StrEnum):
+    """The outcome of one ``sources.canonical.resolve_canonical_source`` call — Step 1
+    (AI News Agent v3).
+
+    Never a silent default: every resolution carries exactly one of these, and the
+    resolver itself never raises for an ordinary "nothing better was found" case —
+    that is ``DISCOVERY_IS_CANONICAL``, not an exception.
+    """
+
+    #: A candidate other than the discovery source outranked it and was selected.
+    RESOLVED = "RESOLVED"
+    #: The discovery source itself already ranks best among whatever was given (zero,
+    #: one, or several other candidates) — nothing better exists to point to instead.
+    DISCOVERY_IS_CANONICAL = "DISCOVERY_IS_CANONICAL"
+    #: The discovery source itself was unusable (missing/malformed URL) — resolution
+    #: could not run. The resolver never fabricates a replacement; a caller falls back
+    #: to whatever source it already had, if any, exactly as section 7 requires.
+    FAILED = "FAILED"
+
+
 class EditorialCategory(StrEnum):
     """What kind of post this is, editorially — Step 3 (AI News Agent v2).
 
@@ -166,6 +230,12 @@ class EditorialCategory(StrEnum):
     #: automatically — see automation/pipeline.py and docs/editorial.md. A future step
     #: decides publishing cadence; this step only makes the type real.
     WEEKLY_DIGEST = "WEEKLY_DIGEST"
+    #: AI News Agent v3 priority step. AI agents, autonomous workflows, no-code AI
+    #: automation, practical AI integrations, personal/business AI automation — never
+    #: generic DevOps/workflow-software/SaaS-automation news where AI is incidental
+    #: (that is ``is_generic_devtech`` territory instead; see
+    #: :mod:`automation.eligibility`).
+    AI_AUTOMATION = "AI_AUTOMATION"
 
 
 class EditorialEvidence(StrEnum):

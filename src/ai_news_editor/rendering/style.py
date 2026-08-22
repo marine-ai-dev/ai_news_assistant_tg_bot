@@ -33,6 +33,7 @@ CATEGORY_EMOJI: dict[EditorialCategory, str] = {
     EditorialCategory.EXPLAINER: "🧠",
     EditorialCategory.RESEARCH: "🔬",
     EditorialCategory.WEEKLY_DIGEST: "📚",
+    EditorialCategory.AI_AUTOMATION: "⚙️",
 }
 
 #: Semantic emoji for the recurring paragraph *purposes* every category's body draws

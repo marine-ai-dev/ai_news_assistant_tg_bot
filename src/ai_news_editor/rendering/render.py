@@ -82,6 +82,7 @@ def render_editorial_post(content: EditorialContent) -> RenderedPost:
         EditorialCategory.NEWS: _render_standard,
         EditorialCategory.AI_TOOL: _render_standard,
         EditorialCategory.EXPLAINER: _render_standard,
+        EditorialCategory.AI_AUTOMATION: _render_standard,
         EditorialCategory.FREE_DEAL: _render_free_deal,
         EditorialCategory.AI_LIFEHACK: _render_lifehack,
         EditorialCategory.PROMPT_WORKFLOW: _render_prompt_workflow,

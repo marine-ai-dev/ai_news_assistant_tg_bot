@@ -54,6 +54,7 @@ _CLASSIFICATION_PAYLOAD = {
     "evidence_type": "PRIMARY_SOURCE",
     "reason": "Офіційне оголошення.",
     "rejection_reason": None,
+    "is_ai_primary": True,
 }
 
 _GENERATION_PAYLOAD = {
