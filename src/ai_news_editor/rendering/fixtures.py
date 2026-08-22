@@ -173,6 +173,28 @@ SAMPLE_CONTENT: dict[EditorialCategory, EditorialContent] = {
         source_label="Огляд тижня",
         source_url="https://blog.example.invalid/weekly",
     ),
+    EditorialCategory.AI_AUTOMATION: EditorialContent(
+        category=EditorialCategory.AI_AUTOMATION,
+        evidence=EditorialEvidence.OFFICIAL_PRODUCT_PAGE,
+        headline="ExampleCorp запустила AI-агента для автоматизації пошти",
+        body=(
+            BodyBlock(
+                purpose="what_it_is",
+                text="Агент сам сортує вхідні листи та готує чернетки відповідей.",
+            ),
+            BodyBlock(
+                purpose="why_useful",
+                text="Економить час на рутинній розписці по пошті щодня.",
+            ),
+            BodyBlock(
+                purpose="where_used",
+                text="Підключається до Gmail та Outlook у кілька кліків.",
+            ),
+        ),
+        detail_bullets=("Працює без коду", "Можна вимкнути будь-який крок"),
+        source_label="ExampleCorp",
+        source_url="https://blog.example.invalid/mail-agent",
+    ),
 }
 
 

@@ -25,7 +25,7 @@ from ai_news_editor.publishing.telegram import TelegramClient
 from ai_news_editor.settings import Settings
 from ai_news_editor.sources.http import HttpClient
 from ai_news_editor.storage import db
-from ai_news_editor.storage.repositories import DraftRepository
+from ai_news_editor.storage.repositories import DraftRepository, PublicationRepository
 
 FAKE_GEMINI_KEY = "AIzaSy" + "z" * 33
 FAKE_TELEGRAM_TOKEN = "123456789:" + "A" * 35
@@ -64,6 +64,7 @@ _AI_TOOL_CLASSIFICATION = {
     "rejection_reason": None,
     "is_speculative_doom": False,
     "is_about_forbidden_geography": False,
+    "is_ai_primary": True,
 }
 _NEWS_CLASSIFICATION = {
     "content_type": "NEWS",
@@ -72,6 +73,20 @@ _NEWS_CLASSIFICATION = {
     "rejection_reason": None,
     "is_speculative_doom": False,
     "is_about_forbidden_geography": False,
+    "is_ai_primary": True,
+}
+#: AI News Agent v3 priority step — a candidate the hard-filter gate must block before
+#: it ever reaches generation or a Telegram send. AI is a secondary angle on a
+#: fundamentally political story.
+_POLITICAL_CLASSIFICATION = {
+    "content_type": "NEWS",
+    "evidence_type": "REPUTABLE_SECONDARY",
+    "reason": "A political story that briefly mentions an AI regulation debate.",
+    "rejection_reason": None,
+    "is_speculative_doom": False,
+    "is_about_forbidden_geography": False,
+    "is_ai_primary": False,
+    "is_political": True,
 }
 _AI_TOOL_GENERATION = {
     "headline": "Vendor запускає новий інструмент",
@@ -386,3 +401,43 @@ class TestDailyLimitSharedAcrossPipelineVersions:
 
         assert second.outcome is Outcome.DAILY_LIMIT_REACHED
         assert telegram_second.calls == []  # type: ignore[attr-defined]
+
+
+class TestEditorialEligibilityGateBlocksProduction:
+    """AI News Agent v3 priority step, section 9 — proof against the actual scheduled
+    production path (this module IS what ``ai-news auto once`` runs in live mode, see
+    cli/auto.py's ``_run_once``): a hard-filtered candidate can never reach generation,
+    media, rendering, or a real Telegram send. Only classification is ever spent on it
+    — no wasted generation call, and definitely no publish."""
+
+    def test_a_politically_flagged_candidate_never_reaches_telegram(
+        self, tmp_path: Path, connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        settings = build_settings(tmp_path)
+        telegram = telegram_transport()
+        gemini = gemini_transport(_POLITICAL_CLASSIFICATION)
+        patch_clients(monkeypatch, gemini=gemini, telegram=telegram, http=http_transport())
+
+        result = run_pass_v2(connection, settings)
+
+        assert result.outcome is Outcome.NO_CANDIDATE, result.detail
+        assert telegram.calls == []  # type: ignore[attr-defined]
+        # Only the one classification call was spent — generation (a second Gemini
+        # call) never happens for a hard-filtered candidate.
+        assert len(gemini.calls) == 1  # type: ignore[attr-defined]
+        assert PublicationRepository(connection).count() == 0
+
+    def test_a_politically_flagged_candidate_leaves_no_draft_or_publication_row(
+        self, tmp_path: Path, connection, monkeypatch: pytest.MonkeyPatch
+    ) -> None:  # type: ignore[no-untyped-def]
+        settings = build_settings(tmp_path)
+        patch_clients(
+            monkeypatch,
+            gemini=gemini_transport(_POLITICAL_CLASSIFICATION),
+            telegram=telegram_transport(),
+            http=http_transport(),
+        )
+
+        run_pass_v2(connection, settings)
+
+        assert PublicationRepository(connection).count() == 0

@@ -53,6 +53,8 @@ class ContentCapability(StrEnum):
     EXPLAINER = "EXPLAINER"
     RESEARCH = "RESEARCH"
     WEEKLY_DIGEST_INPUT = "WEEKLY_DIGEST_INPUT"
+    #: AI News Agent v3 priority step — mirrors EditorialCategory.AI_AUTOMATION.
+    AI_AUTOMATION = "AI_AUTOMATION"
 
 
 class MediaPolicy(StrEnum):
@@ -228,6 +230,12 @@ class EditorialCategory(StrEnum):
     #: automatically — see automation/pipeline.py and docs/editorial.md. A future step
     #: decides publishing cadence; this step only makes the type real.
     WEEKLY_DIGEST = "WEEKLY_DIGEST"
+    #: AI News Agent v3 priority step. AI agents, autonomous workflows, no-code AI
+    #: automation, practical AI integrations, personal/business AI automation — never
+    #: generic DevOps/workflow-software/SaaS-automation news where AI is incidental
+    #: (that is ``is_generic_devtech`` territory instead; see
+    #: :mod:`automation.eligibility`).
+    AI_AUTOMATION = "AI_AUTOMATION"
 
 
 class EditorialEvidence(StrEnum):

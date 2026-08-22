@@ -215,6 +215,29 @@ CATEGORY_PROMPTS: dict[EditorialCategory, CategoryPrompt] = {
         ),
         allowed_evidence=tuple(EditorialEvidence),
     ),
+    EditorialCategory.AI_AUTOMATION: CategoryPrompt(
+        category=EditorialCategory.AI_AUTOMATION,
+        purpose=(
+            "You are describing a practical AI automation: an AI agent, an autonomous "
+            "workflow, or a no-code AI integration that performs a real task for the "
+            "reader — AI must be central to what actually does the work."
+        ),
+        specific_rules=(
+            "State what the automation actually does and what AI-driven step is "
+            "central to it, from the supplied material only.",
+            "Never describe generic workflow/SaaS/DevOps automation where AI is only "
+            "an incidental feature — if the material does not show AI performing the "
+            "central task, reject rather than publish.",
+            "Never state a performance, accuracy, or capability claim the material "
+            "does not itself make.",
+        ),
+        allowed_evidence=(
+            EditorialEvidence.PRIMARY_SOURCE,
+            EditorialEvidence.OFFICIAL_PRODUCT_PAGE,
+            EditorialEvidence.REPUTABLE_SECONDARY,
+            EditorialEvidence.COMMUNITY_DISCUSSION,
+        ),
+    ),
 }
 
 

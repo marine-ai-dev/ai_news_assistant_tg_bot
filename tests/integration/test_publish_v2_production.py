@@ -47,6 +47,7 @@ _AI_TOOL_CLASSIFICATION = {
     "rejection_reason": None,
     "is_speculative_doom": False,
     "is_about_forbidden_geography": False,
+    "is_ai_primary": True,
 }
 
 _NEWS_CLASSIFICATION = {
@@ -56,6 +57,7 @@ _NEWS_CLASSIFICATION = {
     "rejection_reason": None,
     "is_speculative_doom": False,
     "is_about_forbidden_geography": False,
+    "is_ai_primary": True,
 }
 
 def _news_generation_payload() -> dict[str, Any]:

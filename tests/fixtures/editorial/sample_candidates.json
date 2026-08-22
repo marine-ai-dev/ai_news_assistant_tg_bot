@@ -84,6 +84,16 @@
       "url": null,
       "evidence_type": null,
       "note": "An aggregation of already-classified items; each keeps its own category/evidence, none are re-classified here."
+    },
+    {
+      "content_type": "AI_AUTOMATION",
+      "source_id": "example_vendor_blog",
+      "source_family": "ExampleCorp",
+      "trust_tier": "OFFICIAL",
+      "title": "ExampleCorp launches an AI agent that triages support tickets",
+      "url": "https://blog.example.invalid/support-agent",
+      "evidence_type": "OFFICIAL_PRODUCT_PAGE",
+      "note": "AI performs the central task (triage) itself, not an incidental feature of ordinary workflow software."
     }
   ]
 }

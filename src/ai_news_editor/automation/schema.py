@@ -206,6 +206,47 @@ class ClassificationResult(StrictModel):
     #: still rejected, because the rule is about the story's focus, not who wrote it.
     is_about_forbidden_geography: bool = False
 
+    # -- AI News Agent v3 priority step: AI-first relevance + hard editorial filters --
+    #
+    # Answered on every classification, same discipline as the two flags above.
+    # ``False`` is the fail-closed default for every one of these — a classification
+    # response that omits a key (or a candidate the model genuinely could not judge)
+    # never accidentally reads as "passed" a check it never actually answered See
+    # automation.eligibility.evaluate_eligibility for the deterministic code-level
+    # decision these feed — that decision, not this prompt-answered data, is what
+    # actually blocks a candidate from reaching generation/publication.
+    #
+    #: True only if AI itself is one of the story's primary subjects — the core v3
+    #: rule: if removing the AI component would leave essentially the same story, this
+    #: must be answered False.
+    is_ai_primary: bool = False
+    #: True if this is primarily a political story — elections, party politics,
+    #: political disputes/statements, geopolitical disputes.
+    is_political: bool = False
+    #: True if this is primarily about war, armed conflict, combat operations, or
+    #: military operations.
+    is_war_or_conflict: bool = False
+    #: True if this is primarily about military AI/battlefield AI, military drones,
+    #: targeting systems, autonomous weapons, military robotics or surveillance.
+    is_miltech: bool = False
+    #: True if this is primarily about defence-industry/defence-technology — including
+    #: a defence startup, defence procurement tech, or a battlefield-intelligence
+    #: platform. A "startup" or "AI company" framing never exempts a story from this.
+    is_deftech: bool = False
+    #: True if this is primarily a cybersecurity story — a hack, breach, cyberattack,
+    #: vulnerability, malware, ransomware, phishing campaign, threat actor, or security
+    #: incident — rather than an AI capability or product in its own right.
+    is_cybersecurity: bool = False
+    #: True if this is generic government/state news where AI is not clearly the main
+    #: practical subject — a minister's or president's statement that merely mentions
+    #: AI, a generic public-sector digitalisation story. False for a genuinely
+    #: AI-specific product/policy story whose direct subject is AI.
+    is_generic_government_news: bool = False
+    #: True if this is ordinary developer tooling/cloud/database/infrastructure/SaaS/
+    #: software-engineering news where AI is only an incidental feature, not the
+    #: material subject of the release.
+    is_generic_devtech: bool = False
+
     @model_validator(mode="after")
     def _exactly_one_outcome(self) -> Self:
         if (self.content_type is None) != (self.evidence_type is None):
